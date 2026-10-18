@@ -140,6 +140,37 @@
   .over h2{margin:0; font:700 clamp(22px,7vw,36px) var(--pix); text-shadow:2px 0 var(--hot), -2px 0 var(--cyan)}
   .over p{margin:0; color:var(--dim)}
   .over .row{width:100%; max-width:320px}
+  .respawn{position:absolute; left:50%; bottom:10px; transform:translateX(-50%); z-index:2; padding:12px 22px; font-size:15px;
+    box-shadow:0 0 24px rgba(255,42,90,.5); animation:pulse 1s steps(2) infinite}
+  @keyframes pulse{50%{filter:brightness(1.35)}}
+  .respawn:active{transform:translateX(-50%) translateY(2px)}
+
+  /* respawn wikirace */
+  .wiki{position:fixed; inset:0; z-index:6; display:flex; flex-direction:column; background:var(--bg);
+    padding-left:max(12px,env(safe-area-inset-left,0px)); padding-right:max(12px,env(safe-area-inset-right,0px));
+    padding-block:max(10px,env(safe-area-inset-top,0px)) 0; box-sizing:border-box}
+  .wiki-bar{display:flex; align-items:center; gap:10px; padding-bottom:8px; border-bottom:1px solid var(--edge)}
+  .wiki-bar > div{flex:1; min-width:0}
+  .wiki-bar .lbl{margin:0 0 2px}
+  .wiki-goal{font-size:24px; line-height:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .wiki-goal em{font-style:normal; color:var(--cyan)}
+  .wiki-stats{display:flex; gap:10px; color:var(--dim); font-size:18px; margin-top:2px}
+  .wiki-stats .hot{color:var(--hot)}
+  .wiki-bar button{padding:9px 12px; font-size:11px}
+  .wiki-nav{display:flex; align-items:center; gap:10px; padding:8px 0}
+  .wiki-nav h3{margin:0; flex:1; min-width:0; font:700 15px var(--pix); overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .wiki-nav button{padding:7px 10px; font-size:10px}
+  .wiki-body{flex:1; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; touch-action:pan-y;
+    font:16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:#cfc8e2; padding:0 4px max(24px,env(safe-area-inset-bottom,0px));
+    -webkit-user-select:text; user-select:text}
+  .wiki-body h2,.wiki-body h3,.wiki-body h4{font:700 15px var(--pix); color:var(--ink); margin:20px 0 6px}
+  .wiki-body p{margin:0 0 12px}
+  .wiki-body ul,.wiki-body ol{padding-left:20px; margin:0 0 12px}
+  .wiki-body table{display:block; overflow-x:auto; border-collapse:collapse; font-size:14px; margin:0 0 12px; max-width:100%}
+  .wiki-body td,.wiki-body th{border:1px solid var(--edge); padding:3px 6px; vertical-align:top; text-align:left}
+  .wiki-body a{color:var(--cyan); text-decoration:underline; text-decoration-color:rgba(45,226,230,.35); cursor:pointer}
+  .wiki-body a:active{background:rgba(45,226,230,.2)}
+  .wiki-msg{color:var(--dim); font:22px var(--term); padding:30px 0; text-align:center}
   .toast{position:fixed; left:50%; bottom:max(24px,env(safe-area-inset-bottom,0px)); transform:translateX(-50%);
     background:var(--panel2); box-shadow:inset 3px 0 0 var(--hot); padding:8px 14px; font-size:20px; z-index:9; max-width:calc(100% - 40px)}
   @media (prefers-reduced-motion:reduce){.menu::after,.logo .g,.cursor,.char[aria-pressed="true"] canvas{animation:none}}
@@ -199,6 +230,7 @@
   <div class="stage" id="stage">
     <canvas id="cv"></canvas>
     <div class="banner" id="banner"></div>
+    <button class="respawn" id="respawnBtn" hidden>Respawn</button>
     <div class="over" id="over" hidden>
       <h2 id="overTitle"></h2>
       <p id="overSub"></p>
@@ -210,6 +242,20 @@
     </div>
   </div>
   <div class="hint"><span><b>swipe</b> step · <b>tap</b> bomb</span><button id="leaveGame" class="ghost">Quit</button></div>
+</section>
+
+<!-- RESPAWN WIKIRACE -->
+<section class="wiki" id="wiki" hidden>
+  <div class="wiki-bar">
+    <div>
+      <span class="lbl">// Respawn run</span>
+      <div class="wiki-goal">Get to <em id="wTarget"></em></div>
+      <div class="wiki-stats"><span id="wClicks">0 clicks</span><span id="wTime">0:00</span><span id="wLive"></span></div>
+    </div>
+    <button id="wQuit" class="ghost">Give up</button>
+  </div>
+  <div class="wiki-nav"><button id="wBack" class="ghost" disabled>Back</button><h3 id="wTitle"></h3></div>
+  <article class="wiki-body" id="wBody"></article>
 </section>
 
 <div class="toast" id="toast" hidden></div>
@@ -230,6 +276,8 @@ const T = {
   SWIPE_PX: 22, TAP_MS: 320,
   NET_HZ: 20, HOST_TIMEOUT: 6,
   AMBIENT: 'rgb(112,100,150)',   // how dark the unlit field is (lower = darker)
+  RESPAWN_WINDOW: 30,     // seconds a round stays open when the last survivor is waiting on someone's wikirace
+  RESPAWN_SHIELD: 2,      // seconds of invulnerability after respawning
 };
 const W = 11, H = 13, N = W * H;                       // portrait field for phones
 const COLORS = ['#2de2e6', '#ff2a6d', '#fcee0a', '#7dff6a'];   // seat colors: rings, lights, HUD
@@ -290,7 +338,7 @@ function nextRound(){
     if (!s) return null;
     const p = mkPlayer(i); if (s.gone) p.alive = false; return p;
   });
-  S.time = T.ROUND_TIME; S.cd = T.COUNTDOWN; S.ph = 'count'; S.shrinkI = 0; S.shrinkT = 0; S.last = -1;
+  S.time = T.ROUND_TIME; S.cd = T.COUNTDOWN; S.ph = 'count'; S.shrinkI = 0; S.shrinkT = 0; S.last = -1; S.hold = null;
 }
 function toLobby(){ S.seats = S.seats.map(s => (s && !s.gone) ? s : null); Object.assign(S, {ph: 'lobby', wins: [0, 0, 0, 0], rd: 0, last: -1, champ: -1}); }
 
@@ -300,7 +348,11 @@ const canEnter = i => S.g[i] === 0 && !bombAt(i);
 
 function doAct(slot, a){
   const p = S.players && S.players[slot];
-  if (!p || !p.alive || S.ph !== 'play') return;
+  if (!p || S.ph !== 'play') return;
+  if (a === 'w') { if (!p.alive && !p.used) p.racing = true; return; }   // started a respawn wikirace
+  if (a === 'q') { p.racing = false; return; }                            // gave up on it
+  if (a === 'x') { if (!p.alive && p.racing) respawn(p); return; }         // finished it
+  if (!p.alive) return;
   if (a === 'b') dropBomb(p);
   else if (DIR[a] && p.q.length < T.QUEUE) p.q.push(a);
 }
@@ -326,6 +378,16 @@ function stepPlayer(p, dt){
     p.x += Math.sign(p.tx - p.x) * m; p.y += Math.sign(p.ty - p.y) * m; rem -= m;
     if (m >= dist - 1e-9) { p.x = p.tx; p.y = p.ty; p.moving = false; pickUp(p); }
   }
+}
+function respawn(p){
+  const dz = dangerMap(), open = i => S.g[i] === 0 && !bombAt(i);
+  const cells = [];
+  for (let i = 0; i < N; i++) if (open(i) && !dz[i] && !enemyNear(p, i, 2) && Object.values(DIR).some(([dx, dy]) => open(i + dy * W + dx))) cells.push(i);
+  const i = cells.length ? cells[(Math.random() * cells.length) | 0] : SPAWN[p.slot][1] * W + SPAWN[p.slot][0];
+  const x = i % W, y = (i / W) | 0;
+  Object.assign(p, {x, y, tx: x, ty: y, moving: false, q: [], alive: true, racing: false, used: true, inv: T.RESPAWN_SHIELD,
+    bombs: T.START_BOMBS, range: T.START_RANGE, speed: T.SPEED});
+  S.hold = null;
 }
 function pickUp(p){
   const i = cellOf(p), k = S.ups.findIndex(u => u.i === i);
@@ -383,10 +445,18 @@ function update(dt){
   for (const p of S.players) if (p && p.alive) {
     if (S.seats[p.slot] && S.seats[p.slot].kind === 'b') botThink(p, dt);
     stepPlayer(p, dt);
+    if (p.inv > 0) p.inv -= dt;
   }
-  for (const p of S.players) if (p && p.alive && S.fl[cellOf(p)] > 0) p.alive = false;
+  for (const p of S.players) if (p && p.alive && !(p.inv > 0) && S.fl[cellOf(p)] > 0) p.alive = false;
   const live = S.players.filter(p => p && p.alive);
   if (live.length <= 1) {
+    if (S.players.some(p => p && !p.alive && p.racing)) {   // someone is racing back in: hold the round open a while
+      if (S.hold == null) S.hold = T.RESPAWN_WINDOW;
+      S.hold -= dt;
+      if (S.hold > 0) return;
+    }
+    S.hold = null;
+    for (const p of S.players) if (p) p.racing = false;
     S.last = live.length ? live[0].slot : -1;
     if (S.last >= 0 && ++S.wins[S.last] >= T.WINS) S.champ = S.last;
     S.ph = 'round'; S.pause = T.ROUND_PAUSE;
@@ -465,7 +535,9 @@ function encode(){
   if (S.ph === 'lobby') return s;
   s.g = S.g.join('');
   s.tm = Math.ceil(S.time * 10); s.cd = Math.ceil(S.cd * 10); s.bx = S.boom;
-  s.p = S.players.map(p => p ? [Math.round(p.x * 100), Math.round(p.y * 100), p.alive ? 1 : 0, p.bombs, p.range, p.face] : 0);
+  s.p = S.players.map(p => p ? [Math.round(p.x * 100), Math.round(p.y * 100), p.alive ? 1 : 0, p.bombs, p.range, p.face,
+    (p.racing ? 1 : 0) | (p.used ? 2 : 0) | (p.inv > 0 ? 4 : 0)] : 0);
+  if (S.hold != null) s.hd = Math.ceil(S.hold * 10);
   s.b = S.bombs.map(b => [b.x, b.y, Math.round(b.t * 100)]);
   s.f = []; for (let i = 0; i < N; i++) if (S.fl[i] > 0) s.f.push(i, Math.round(S.fl[i] * 100));
   s.u = S.ups.flatMap(u => [u.i, u.t]);
@@ -595,7 +667,7 @@ async function joinGame(code){
 function leave(msg){
   if (NET.game) { NET.game.leave().catch(() => {}); NET.game = null; }
   if (NET.role === 'host' && NET.room) NET.room.presence({host: null, hn: null, n: null, ph: null}).catch(() => {});
-  NET.role = null; NET.lobbyKey = ''; S = null; snap = null; endPsy(); bursts = [];
+  NET.role = null; NET.lobbyKey = ''; S = null; snap = null; endPsy(); closeRace(); bursts = [];
   show('home'); renderGames();
   if (msg) toast(msg);
 }
@@ -606,7 +678,7 @@ function hostSync(){
   S.seats.forEach((s, i) => {
     if (!s || s.kind !== 'p' || byPeer.has(s.peer)) return;
     if (S.ph === 'lobby') S.seats[i] = null;
-    else { s.gone = true; const pl = S.players && S.players[i]; if (pl) pl.alive = false; }
+    else { s.gone = true; const pl = S.players && S.players[i]; if (pl) { pl.alive = false; pl.racing = false; } }
   });
   if (S.ph === 'lobby') for (const [peer, p] of byPeer) {
     if (S.seats.some(s => s && s.peer === peer)) continue;
@@ -622,7 +694,7 @@ function hostSync(){
     for (const e of a) {
       if (!Array.isArray(e) || typeof e[0] !== 'number' || e[0] <= S.acks[i]) continue;
       S.acks[i] = e[0];
-      if (typeof e[1] === 'string' && 'udlrb'.includes(e[1]) && e[1].length === 1) doAct(i, e[1]);
+      if (typeof e[1] === 'string' && e[1].length === 1 && 'udlrbwqx'.includes(e[1])) doAct(i, e[1]);
     }
   });
   const key = [NET.code, S.seats.filter(Boolean).length, S.ph === 'lobby' ? 'lobby' : 'play', myName()].join('|');
@@ -661,7 +733,7 @@ function mySlot(){
 let lastSwipe = {d: null, t: 0};
 function sendAct(a){
   if (!snap || snap.ph === 'lobby' || snap.ph === 'match') return;
-  if (a !== 'b') lastSwipe = {d: a, t: performance.now()};
+  if (DIR[a]) lastSwipe = {d: a, t: performance.now()};
   if (NET.role === 'host' || NET.role === 'solo') return doAct(0, a);
   if (NET.role !== 'client' || mySlot() < 0) return;
   NET.pend.push([++NET.seq, a]); NET.pend = NET.pend.slice(-12);
@@ -892,7 +964,7 @@ addEventListener('mousemove', e => { if (!mouse || mouse.fired) return; const dx
   if (Math.hypot(dx, dy) > T.SWIPE_PX) { mouse.fired = true; sendAct(dirOf(dx, dy)); } });
 addEventListener('mouseup', () => { if (mouse && !mouse.fired && performance.now() - mouse.t < T.TAP_MS) sendAct('b'); mouse = null; });
 addEventListener('keydown', e => {
-  if (screen !== 'game') return;
+  if (screen !== 'game' || !$('wiki').hidden) return;
   const k = {arrowup: 'u', w: 'u', arrowdown: 'd', s: 'd', arrowleft: 'l', a: 'l', arrowright: 'r', d: 'r', ' ': 'b'}[e.key.toLowerCase()];
   if (!k || e.repeat) return; e.preventDefault(); sendAct(k);
 });
@@ -939,7 +1011,23 @@ function light(x, y, r, hex, a){
 }
 
 const disp = [null, null, null, null];   // smoothed positions for remote snapshots
-const anim = [0, 1, 2, 3].map(() => ({walk: 0, flip: false, px: 0, py: 0, alive: false}));
+const anim = [0, 1, 2, 3].map(() => ({walk: 0, flip: false, px: 0, py: 0, alive: false, dx: 0, dy: 0, hist: []}));
+let dust = [];
+const ghostCache = new Map();
+function ghostSprite(ch, seat, leg){   // seat-colored silhouette for dash afterimages
+  const key = ch + ':' + seat + ':' + leg;
+  let c = ghostCache.get(key);
+  if (!c) {
+    const src = charSprite(ch, seat, leg, 0); c = cnv(src.width, src.height); const g = c.getContext('2d');
+    g.drawImage(src, 0, 0); g.globalCompositeOperation = 'source-in'; g.fillStyle = COLORS[seat]; g.fillRect(0, 0, c.width, c.height);
+    ghostCache.set(key, c);
+  }
+  return c;
+}
+function drawChar(img, X, Y, flip){
+  if (!flip) return b.drawImage(img, X + 1, Y);
+  b.save(); b.translate(X + TS, 0); b.scale(-1, 1); b.drawImage(img, 1, Y); b.restore();
+}
 let decals = [], decalRound = -1;
 let shake = 0, lastBoom = -1;
 
@@ -954,6 +1042,13 @@ function drawGame(s, dt, now){
   b.drawImage(art.floor, 0, 0);
   b.globalAlpha = reduce ? .12 : .08 + .07 * Math.sin(now / 900); b.drawImage(art.grout, 0, 0); b.globalAlpha = 1;
   for (const d of decals) b.drawImage(d.img, d.x, d.y);
+  dust = dust.filter(d => now - d.t0 < 350);
+  for (const d of dust) {
+    const t = (now - d.t0) / 1000;
+    b.globalAlpha = 1 - t / .35; b.fillStyle = '#d8d0ee';
+    b.fillRect(Math.round(d.x + d.vx * t), Math.round(d.y + d.vy * t), d.s, d.s);
+  }
+  b.globalAlpha = 1;
   // world, row by row so lower things overlap higher ones
   const fire = new Map(), f = Array.isArray(s.f) ? s.f : [];
   for (let k = 0; k + 1 < f.length; k += 2) fire.set(f[k], f[k + 1] / 100);
@@ -1000,26 +1095,42 @@ function drawGame(s, dt, now){
     if (A.alive && !p[2] && (s.ph === 'play' || s.ph === 'round')) {
       decals.push({img: splat(COLORS[i]), x: Math.round(A.px * TS) - 2, y: Math.round(A.py * TS) - 2});
       spawnBurst(i, A.px, A.py, chOf(seats[i] && seats[i][4]), now);
-      if (i === me) startPsy(now, A.px, A.py);
+      if (i === me) { startPsy(now, A.px, A.py); prefetchRace(); }
     }
+    if (!A.alive && p[2] && s.ph === 'play' && (p[6] & 2)) { bursts.push({cx: x * TS + 8, cy: y * TS + 13, t0: now, parts: [], col: COLORS[i]}); disp[i] = {x, y}; }   // respawned
     if (i === me && p[2]) endPsy();
     A.alive = !!p[2];
     if (!p[2]) continue;
-    const moving = Math.abs(x - A.px) + Math.abs(y - A.py) > .002;
+    const ddx = x - A.px, ddy = y - A.py, jump = Math.abs(ddx) + Math.abs(ddy), moving = jump > .002 && jump < 1.5;   // bigger = teleport (respawn, new round)
+    if (moving) {
+      const nx = Math.sign(Math.round(ddx * 1000)), ny = Math.sign(Math.round(ddy * 1000));
+      if (!A.walk || nx !== A.dx || ny !== A.dy) spawnDust(A.px, A.py, nx, ny);   // kick-off puff on each new dash
+      A.dx = nx; A.dy = ny; A.hist.unshift({x, y}); if (A.hist.length > 8) A.hist.length = 8;
+    } else A.hist.length = 0;
     A.walk = moving ? A.walk + dt : 0; A.px = x; A.py = y;
     if (p[5] === 'l') A.flip = true; else if (p[5] === 'r') A.flip = false;
-    order.push({i, x, y, ch: chOf(seats[i] && seats[i][4])});
+    order.push({i, x, y, ch: chOf(seats[i] && seats[i][4]), inv: !!(p[6] & 4)});
   }
   order.sort((a, c) => a.y - c.y);
   for (const o of order) {
     const A = anim[o.i], leg = A.walk > 0 ? ((A.walk * 9) | 0) & 1 : 0;
     const X = Math.round(o.x * TS), Y = Math.round(o.y * TS);
     b.fillStyle = rgba(COLORS[o.i], .55); b.fillRect(X + 3, Y + 13, 10, 2); b.fillRect(X + 4, Y + 12, 8, 4);  // seat-color ring
-    const spr = charSprite(o.ch, o.i, leg, ((now / 90) | 0) % 3);
-    b.save();
-    if (A.flip) { b.translate(X + TS, 0); b.scale(-1, 1); b.drawImage(spr, 1, Y - 3 - leg); }
-    else b.drawImage(spr, X + 1, Y - 3 - leg);
-    b.restore();
+    if (A.walk > 0) {                                       // dash: speed streaks + seat-colored afterimages
+      b.fillStyle = 'rgba(255,255,255,.35)';
+      for (const k of [5, 10]) {
+        if (A.dx) b.fillRect(X + 8 - A.dx * (6 + k), Y + 4 + k * .6, 5, 1);
+        else b.fillRect(X + 4 + k * .6, Y + 6 - A.dy * (4 + k), 1, 5);
+      }
+      for (const [k, a] of [[6, .15], [4, .28], [2, .45]]) {
+        const h = A.hist[k]; if (!h) continue;
+        b.globalAlpha = a; drawChar(ghostSprite(o.ch, o.i, leg), Math.round(h.x * TS), Math.round(h.y * TS) - 3 - leg, A.flip);
+      }
+      b.globalAlpha = 1;
+    }
+    if (o.inv && ((now / 80) | 0) & 1) continue;            // spawn shield blink
+    const lean = A.walk > 0 ? 1 : 0;
+    drawChar(charSprite(o.ch, o.i, leg, ((now / 90) | 0) % 3), X + A.dx * lean, Y - 3 - leg + A.dy * lean, A.flip);
   }
 
   // lighting: colored lights over a dim ambient, multiplied; then a soft additive glow
@@ -1069,6 +1180,12 @@ const hash = (a, c, e) => { let h = (Math.imul(a, 374761393) + Math.imul(c, 6682
   h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const chR = cnv(BW, BH), rcx = chR.getContext('2d'), chC = cnv(BW, BH), ccx = chC.getContext('2d');
 
+function spawnDust(x, y, dx, dy){
+  const now = performance.now();
+  for (let k = 0; k < 4; k++) dust.push({t0: now, s: k & 1 ? 1 : 2,
+    x: x * TS + 8 - dx * 5 + (Math.random() - .5) * 6, y: y * TS + 14 - dy * 4 + (Math.random() - .5) * 2,
+    vx: -dx * 25 + (Math.random() - .5) * 20, vy: -dy * 20 - 6 - Math.random() * 10});
+}
 function spawnBurst(slot, x, y, ch, now){
   const spr = charSprite(ch, slot, 0, 0), d = spr.getContext('2d').getImageData(0, 0, spr.width, spr.height).data, parts = [];
   for (let py = 0; py < spr.height; py += 2) for (let px = 0; px < spr.width; px += 2) {
@@ -1161,7 +1278,7 @@ function renderHud(s){
   const seats = Array.isArray(s.seat) ? s.seat : [], ps = Array.isArray(s.p) ? s.p : [], w = Array.isArray(s.w) ? s.w : [];
   const tm = Math.max(0, (+s.tm || 0) / 10), sd = s.ph === 'play' && tm <= 0;
   const clock = sd ? 'SUDDEN' : `${Math.floor(tm / 60)}:${String(Math.floor(tm % 60)).padStart(2, '0')}`;
-  const key = JSON.stringify([seats, ps.map(p => p && p[2]), w, clock, s.rd, mySlot()]);
+  const key = JSON.stringify([seats, ps.map(p => p && [p[2], p[6]]), w, clock, s.rd, mySlot()]);
   if (key === hudKey) return; hudKey = key;
   const hud = $('hud'); hud.textContent = '';
   const chip = i => {
@@ -1170,7 +1287,7 @@ function renderHud(s){
     el.style.setProperty('--c', COLORS[i]);
     if (!st) return el;
     const txt = document.createElement('div');
-    const sp = document.createElement('span'); sp.textContent = i === mySlot() ? 'You' : cleanName(st[0]) || CNAMES[i];
+    const sp = document.createElement('span'); sp.textContent = (i === mySlot() ? 'You' : cleanName(st[0]) || CNAMES[i]) + (ps[i] && (ps[i][6] & 1) ? ' ↻' : '');
     const pips = document.createElement('div'); pips.className = 'pips';
     for (let k = 0; k < T.WINS; k++) { const p = document.createElement('u'); if (k < (+w[i] || 0)) p.style.background = COLORS[i]; pips.append(p); }
     txt.append(sp, pips);
@@ -1189,6 +1306,11 @@ function renderBanner(s){
     const n = Math.ceil((+s.cd || 0) / 10); text = String(Math.max(1, n)); sub = 'Round ' + s.rd;
     if (n !== lastCount) { lastCount = n; blip(440); }
   } else if (s.ph === 'play' && T.ROUND_TIME - (+s.tm || 0) / 10 < .7) { text = 'GO'; color = '#2de2e6'; if (lastCount) { lastCount = 0; blip(880); } }
+  else if (s.ph === 'play' && s.hd > 0) {
+    const ps = Array.isArray(s.p) ? s.p : [], r = ps.findIndex(p => Array.isArray(p) && (p[6] & 1));
+    sub = r === mySlot() ? 'finish your run' : (r >= 0 ? nameOf(r) : 'someone') + ' is racing back';
+    text = String(Math.ceil(s.hd / 10)); color = '#fcee0a';
+  }
   else if (s.ph === 'round') {
     if (s.last >= 0) { text = s.last === mySlot() ? 'Round is yours' : nameOf(s.last) + ' takes it'; color = COLORS[s.last]; }
     else text = 'Draw';
@@ -1207,10 +1329,122 @@ function renderBanner(s){
   }
 }
 function present(s, dt, now){
-  if (s.ph === 'lobby') { endPsy(); show('lobby'); renderLobby(s); return; }
+  if (s.ph === 'lobby') { endPsy(); closeRace(); show('lobby'); renderLobby(s); return; }
   lobbyKey = '';
-  show('game'); drawGame(s, dt, now); renderHud(s); renderBanner(s);
+  show('game'); drawGame(s, dt, now); renderHud(s); renderBanner(s); syncRespawn(s);
 }
+
+// ---- Respawn wikirace ------------------------------------------------------------
+// Dead players can earn one respawn per round by clicking from a Wikipedia article to a
+// target article. The start is picked from pages that link to a page linking to the target,
+// so it's at most 2 clicks away. Needs Wikipedia, which claude.ai's frame blocks.
+const WIKI_OK = !window.claude && typeof fetch === 'function';
+const TARGETS = ['Pizza', 'Japan', 'Moon', 'Dog', 'Basketball', 'Chocolate', 'Volcano', 'Shark', 'Guitar', 'Coffee',
+  'Dinosaur', 'Pirate', 'Robot', 'Video game', 'Lightning', 'Hip hop music', 'Banana', 'Skateboarding', 'Ninja', 'Penguin'];
+const NS = /^(File|Image|Category|Help|Wikipedia|WP|Template|Portal|Special|Talk|User|Draft|Module|MediaWiki|Book|TimedText)( talk)?:/i;
+const goodTitle = t => typeof t === 'string' && !NS.test(t) && !/^(List of|Index of|Outline of|Timeline of|Glossary of|\d)|\(disambiguation\)/.test(t);
+const sameTitle = (a, c) => a.replace(/_/g, ' ').toLowerCase() === c.replace(/_/g, ' ').toLowerCase();
+const pick = a => a[(Math.random() * a.length) | 0];
+async function wapi(params){
+  const u = new URL('https://en.wikipedia.org/w/api.php');
+  for (const k in Object.assign(params, {format: 'json', formatversion: '2', origin: '*'})) u.searchParams.set(k, params[k]);
+  const r = await fetch(u); if (!r.ok) throw new Error('wiki ' + r.status);
+  return r.json();
+}
+async function backlinks(t){
+  const j = await wapi({action: 'query', list: 'backlinks', bltitle: t, blnamespace: 0, blfilterredir: 'nonredirects', bllimit: 300});
+  return ((j.query && j.query.backlinks) || []).map(x => x.title).filter(goodTitle);
+}
+async function makeRace(){
+  const target = pick(TARGETS), l1 = await backlinks(target);
+  if (!l1.length) throw new Error('no links');
+  const mid = pick(l1), l2 = (await backlinks(mid)).filter(t => !sameTitle(t, target));
+  return {target, start: l2.length ? pick(l2) : mid};
+}
+let raceP = null, race = null;
+function prefetchRace(){ if (WIKI_OK && !raceP) raceP = makeRace().catch(() => null); }
+
+function syncRespawn(s){
+  const me = mySlot(), p = Array.isArray(s.p) ? s.p[me] : null;
+  const can = WIKI_OK && s.ph === 'play' && Array.isArray(p) && !p[2] && !(p[6] & 2);
+  $('respawnBtn').hidden = !can || !!race;
+  if (race && (!can || !race.live)) { if (race.live && s.ph !== 'play') toast('Round over before you made it back.'); closeRace(); }
+  if (race) {
+    const alive = (Array.isArray(s.p) ? s.p : []).filter(q => Array.isArray(q) && q[2]).length;
+    $('wLive').textContent = s.hd > 0 ? 'window ' + Math.ceil(s.hd / 10) + 's' : alive + ' still fighting';
+    $('wLive').className = s.hd > 0 ? 'hot' : '';
+  }
+}
+async function openRace(){
+  $('respawnBtn').hidden = true;
+  race = {live: true, clicks: 0, t0: performance.now(), hist: [], target: '', cur: ''};
+  $('wiki').hidden = false; $('wTarget').textContent = '…'; $('wTitle').textContent = ''; $('wClicks').textContent = '0 clicks'; $('wBack').disabled = true;
+  wikiMsg('Picking your route…');
+  prefetchRace();
+  const r = await raceP; raceP = null;
+  if (!race) return;
+  if (!r) { closeRace(); return toast("Couldn't reach Wikipedia. Check your connection."); }
+  race.target = r.target; $('wTarget').textContent = r.target;
+  sendAct('w');
+  race.t0 = performance.now();
+  loadArticle(r.start);
+}
+function closeRace(){
+  if (!race) return;
+  if (race.live) sendAct('q');
+  race = null; $('wiki').hidden = true; $('wBody').textContent = '';
+}
+function wikiMsg(text){ const m = document.createElement('div'); m.className = 'wiki-msg'; m.textContent = text; $('wBody').replaceChildren(m); }
+function finishRace(){
+  sendAct('x'); race.live = false;
+  const secs = ((performance.now() - race.t0) / 1000).toFixed(1);
+  closeRace(); toast(`Back in! ${secs}s`); blip(990);
+}
+async function loadArticle(title, back){
+  if (!race) return;
+  if (sameTitle(title, race.target)) return finishRace();
+  const ticket = race.ticket = {};
+  wikiMsg('Loading ' + title + '…'); $('wTitle').textContent = title;
+  let j;
+  try { j = await wapi({action: 'parse', page: title, prop: 'text', redirects: 1, disableeditsection: 1, disabletoc: 1}); }
+  catch { if (race && race.ticket === ticket) wikiMsg("Couldn't load that page. Try another link."); return; }
+  if (!race || race.ticket !== ticket) return;
+  const real = (j.parse && j.parse.title) || title;
+  if (sameTitle(real, race.target)) return finishRace();
+  if (!back && race.cur) race.hist.push(race.cur);
+  race.cur = real; $('wTitle').textContent = real; $('wBack').disabled = !race.hist.length;
+  $('wBody').replaceChildren(...cleanArticle((j.parse && j.parse.text) || ''));
+  $('wBody').scrollTop = 0;
+}
+// Keep only text, structure and article links; everything else (scripts, styles, images, attributes) goes.
+function cleanArticle(html){
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script,style,link,meta,img,picture,figure,audio,video,svg,math,sup.reference,.mw-editsection,.reflist,.references,.navbox,.hatnote,.mw-empty-elt,.metadata,.ambox,.sidebar,.thumb,.gallery,.noprint,.mw-references-wrap,.shortdescription')
+    .forEach(n => n.remove());
+  for (const el of doc.body.querySelectorAll('*')) {
+    if (el.tagName === 'A') {
+      const m = (el.getAttribute('href') || '').match(/^\/wiki\/([^#?]+)/);
+      let t = null; try { t = m && decodeURIComponent(m[1]).replace(/_/g, ' '); } catch {}
+      for (const at of [...el.attributes]) el.removeAttribute(at.name);
+      if (t && !NS.test(t)) el.dataset.t = t; else el.replaceWith(...el.childNodes);
+    } else for (const at of [...el.attributes]) if (at.name !== 'colspan' && at.name !== 'rowspan') el.removeAttribute(at.name);
+  }
+  return [...doc.body.childNodes].map(n => document.importNode(n, true));
+}
+$('wBody').addEventListener('click', e => {
+  const a = e.target.closest('a[data-t]'); if (!a || !race || !race.live) return;
+  e.preventDefault(); race.clicks++;
+  $('wClicks').textContent = race.clicks + (race.clicks === 1 ? ' click' : ' clicks');
+  loadArticle(a.dataset.t);
+});
+$('wBack').onclick = () => { if (race && race.hist.length) loadArticle(race.hist.pop(), true); };
+$('wQuit').onclick = () => closeRace();
+$('respawnBtn').onclick = () => { audio(); openRace(); };
+setInterval(() => {
+  if (!race) return;
+  const t = ((performance.now() - race.t0) / 1000) | 0;
+  $('wTime').textContent = `${(t / 60) | 0}:${String(t % 60).padStart(2, '0')}`;
+}, 250);
 
 // ---- Sound (starts after the first tap, as iOS requires) -----------------------
 let AC = null;
