@@ -2082,13 +2082,34 @@ function audio(){
   if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch { AC = null; } }
   if (AC && AC.state === 'suspended') AC.resume().catch(() => {});
 }
+// Explosion: a pitch-dropping sub thump, a short burst of sample-held digital grit, a bit-crushed zap sweeping
+// down, and bright crackles that sputter out (the fizzle). Rendered once, then replayed at slightly varied pitch.
+let boomBuf = null;
+function boomSamples(d, sr){
+  let ph = 0, zph = 0, lp = 0, hold = 0, prevN = 0, crack = 0;
+  for (let i = 0; i < d.length; i++) {
+    const t = i / sr;
+    ph += (42 + 120 * Math.exp(-t * 20)) / sr;
+    const thump = Math.sin(ph * 2 * Math.PI) * Math.exp(-t * 9) * .9;
+    if (i % 3 === 0) hold = Math.random() * 2 - 1;
+    lp += (hold - lp) * (.02 + .25 * Math.exp(-t * 10));
+    const grit = lp * Math.exp(-t * 12) * 1.4;
+    zph += (70 + 1100 * Math.exp(-t * 9)) / sr;
+    const zap = Math.round((zph % 1 < .5 ? 1 : -1) * 3) / 3 * Math.exp(-t * 8) * .12;
+    if (t > .05 && Math.random() < .004 * Math.exp(-t * 2.5)) crack = 1;
+    crack *= .93;
+    const n = Math.random() * 2 - 1, hp = n - prevN; prevN = n;
+    const fizz = hp * crack * .45 * Math.exp(-t * 2.2) + hp * .05 * Math.exp(-t * 5);
+    d[i] = Math.tanh((thump + grit + zap + fizz) * 1.2) * .5;
+  }
+  for (let i = 0; i < 64; i++) d[i] *= i / 64;   // no click at the start
+}
 function boom(){
   if (!AC || AC.state !== 'running') return;
-  const len = .4, bf = AC.createBuffer(1, AC.sampleRate * len, AC.sampleRate), d = bf.getChannelData(0);
-  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2.4);
-  const src = AC.createBufferSource(), lp = AC.createBiquadFilter(), gain = AC.createGain();
-  src.buffer = bf; lp.type = 'lowpass'; lp.frequency.value = 900; gain.gain.value = .5;
-  src.connect(lp).connect(gain).connect(AC.destination); src.start();
+  if (!boomBuf) { boomBuf = AC.createBuffer(1, Math.floor(AC.sampleRate * .75), AC.sampleRate); boomSamples(boomBuf.getChannelData(0), AC.sampleRate); }
+  const src = AC.createBufferSource(), gain = AC.createGain();
+  src.buffer = boomBuf; src.playbackRate.value = .92 + Math.random() * .16; gain.gain.value = .4;
+  src.connect(gain).connect(AC.destination); src.start();
 }
 function blip(f){
   if (!AC || AC.state !== 'running') return;
