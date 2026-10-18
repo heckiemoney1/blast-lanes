@@ -351,7 +351,8 @@ const T = {
   SHRINK_FAST: 4,         // seconds between rings once the clock runs out
   SHRINK_WARN: 4,         // seconds a ring flashes before it closes
   ULT_TIME: 2.8,          // secret finisher cinematic length (the match pauses for it)
-  ULT_REACH: 6,           // tiles, in a straight line
+  ULT_REACH: 6,           // tiles from you in any direction (diagonals too, walls don't block)
+  AIM_TIME: 4,            // seconds to tap a target after entering the secret
   SECRET_TIME: 2,         // seconds to tap above the field twice, then below it twice (keyboard: up up down down left right left right, space)
   QTE_TIME: 0.5,          // the victim's window to hit JUMP! (the cinematic keeps rolling meanwhile)
   DODGE_TIME: 5,          // then this long to make DODGE_GOAL in a mini 2048 from a normal start
@@ -548,24 +549,17 @@ function doAct(slot, a){
     return;
   }
   if (u || !p.alive) return;
-  if (a === 'U') { tryUlt(p); return; }   // the secret input was entered on that player's phone
+  const ti = 'ghij'.indexOf(a);
+  if (ti >= 0) { tryUlt(p, ti); return; }   // secret finisher aimed at seat ti from that player's phone
   if (a === 'b') dropBomb(p);
   else if (DIR[a] && p.q.length < T.QUEUE) p.q.push(a);
 }
-// Secret finisher (see secretTap below): once per match, hits the nearest enemy in a straight line within
-// reach and freezes the match for a cinematic. A whiff keeps it for later.
-// The victim gets a JUMP! prompt; hit it and reach 128 in a mini 2048 to dodge the car.
-function tryUlt(p){
-  if (!S.ultUsed || S.ultUsed[p.slot]) return false;
-  const here = cellOf(p); let best = null, bd = 99;
-  for (const [dx, dy] of Object.values(DIR)) for (let r = 1; r <= T.ULT_REACH; r++) {
-    const i = here + (dy * W + dx) * r;
-    if (hard(S.g[i])) break;
-    const v = S.players.find(o => o && o.alive && o !== p && !(o.inv > 0) && cellOf(o) === i);
-    if (v && r < bd) { best = v; bd = r; }
-    if (v) break;
-  }
-  if (!best) return false;
+// Secret finisher (see tap() below): once per match, the player picks any enemy within ULT_REACH tiles and the
+// match freezes for a cinematic. The victim gets a JUMP! prompt; hit it and make DODGE_GOAL in a mini 2048 to dodge.
+function tryUlt(p, vi){
+  const best = S.players[vi];
+  if (!S.ultUsed || S.ultUsed[p.slot] || !best || best === p || !best.alive || best.inv > 0) return false;
+  if (Math.max(Math.abs(Math.round(best.x) - Math.round(p.x)), Math.abs(Math.round(best.y) - Math.round(p.y))) > T.ULT_REACH) return false;
   S.ultUsed[p.slot] = true;
   for (const o of S.players) if (o) o.q = [];
   S.ult = {a: p.slot, v: best.slot, t: 0, stage: 0, dodged: false};   // stages: 0 intro, 2 dodging (clock paused), 3 car
@@ -951,7 +945,7 @@ function hostSync(){
     for (const e of a) {
       if (!Array.isArray(e) || typeof e[0] !== 'number' || e[0] <= S.acks[i]) continue;
       S.acks[i] = e[0];
-      if (typeof e[1] === 'string' && e[1].length === 1 && 'udlrbwqxJKFU'.includes(e[1])) doAct(i, e[1]);
+      if (typeof e[1] === 'string' && e[1].length === 1 && 'udlrbwqxJKFghij'.includes(e[1])) doAct(i, e[1]);
     }
   });
   const key = [NET.code, S.seats.filter(Boolean).length, S.ph === 'lobby' ? 'lobby' : 'play', myName()].join('|');
@@ -1376,15 +1370,35 @@ surf.addEventListener('touchmove', e => {
 const swipe = d => g2048 ? move2048(d) : sendAct(d);
 // Taps: on or below the field they drop a bomb. The secret finisher is two taps ABOVE the field, then two
 // BELOW it, within SECRET_TIME. Taps above the field never do anything else, so the secret can't misfire.
+// The secret opens aim mode: tap an enemy within reach (marked on the field) in the next AIM_TIME seconds.
 const secret = [];
-function tap(y){
+let aim = null;
+function aimTargets(){   // seats I could hit right now, from the latest snapshot
+  const ps = snap && Array.isArray(snap.p) ? snap.p : [], me = mySlot(), m = ps[me], out = [];
+  if (!Array.isArray(m) || !m[2]) return out;
+  const mx = Math.round(m[0] / 100), my = Math.round(m[1] / 100);
+  ps.forEach((q, i) => {
+    if (i === me || !Array.isArray(q) || !q[2] || (q[6] & 4)) return;
+    if (Math.max(Math.abs(Math.round(q[0] / 100) - mx), Math.abs(Math.round(q[1] / 100) - my)) <= T.ULT_REACH) out.push(i);
+  });
+  return out;
+}
+function tap(x, y){
   if (g2048) return;
   const fr = cv.getBoundingClientRect(), now = performance.now();
+  if (aim && now < aim.until) {   // aiming: only a tap on a marked enemy does anything
+    const tx = (x - fr.left) / fr.width * W, ty = (y - fr.top) / fr.height * H, ps = snap && snap.p;
+    let pickI = -1, bd = 1.2;
+    for (const i of aimTargets()) { const d = Math.hypot(tx - (ps[i][0] / 100 + .5), ty - (ps[i][1] / 100 + .4)); if (d < bd) { bd = d; pickI = i; } }
+    if (pickI >= 0) { aim = null; sendAct('ghij'[pickI]); }
+    return;
+  }
+  aim = null;
   while (secret.length && now - secret[0][1] > T.SECRET_TIME * 1000) secret.shift();
   const seq = secret.map(k => k[0]).join('');
   if (y < fr.top) { if (seq.includes('Z')) secret.length = 0; secret.push(['A', now]); if (secret.length > 2) secret.shift(); return; }
   if (y > fr.bottom && (seq === 'AA' || seq === 'AAZ')) {
-    if (seq === 'AAZ') { secret.length = 0; sendAct('U'); } else secret.push(['Z', now]);
+    if (seq === 'AAZ') { secret.length = 0; if (aimTargets().length) aim = {until: now + T.AIM_TIME * 1000}; } else secret.push(['Z', now]);
     return;
   }
   secret.length = 0; sendAct('b');
@@ -1393,12 +1407,13 @@ const keyHist = [];   // keyboard version of the secret, for desktop: up up down
 function keyTap(){
   const now = performance.now(), seq = keyHist.filter(k => now - k[1] < 4000).map(k => k[0]).join('');
   keyHist.length = 0;
-  if (seq.endsWith('uuddlrlr')) sendAct('U'); else if (!g2048) sendAct('b');
+  if (seq.endsWith('uuddlrlr') && aimTargets().length) aim = {until: now + T.AIM_TIME * 1000};   // then click a target
+  else if (!g2048) sendAct('b');
 }
 const endTouch = e => {
   for (const t of e.changedTouches) {
     const s = touches.get(t.identifier); touches.delete(t.identifier);
-    if (s && !s.fired && e.type === 'touchend' && performance.now() - s.t < T.TAP_MS) tap(t.clientY);
+    if (s && !s.fired && e.type === 'touchend' && performance.now() - s.t < T.TAP_MS) tap(t.clientX, t.clientY);
   }
 };
 surf.addEventListener('touchend', endTouch); surf.addEventListener('touchcancel', endTouch);
@@ -1406,7 +1421,7 @@ let mouse = null;   // desktop testing of the touch scheme
 surf.addEventListener('mousedown', e => { if (!e.target.closest('button')) mouse = {x: e.clientX, y: e.clientY, t: performance.now(), fired: false}; });
 addEventListener('mousemove', e => { if (!mouse || mouse.fired) return; const dx = e.clientX - mouse.x, dy = e.clientY - mouse.y;
   if (Math.hypot(dx, dy) > T.SWIPE_PX) { mouse.fired = true; swipe(dirOf(dx, dy)); } });
-addEventListener('mouseup', e => { if (mouse && !mouse.fired && performance.now() - mouse.t < T.TAP_MS) tap(e.clientY); mouse = null; });
+addEventListener('mouseup', e => { if (mouse && !mouse.fired && performance.now() - mouse.t < T.TAP_MS) tap(e.clientX, e.clientY); mouse = null; });
 addEventListener('keydown', e => {
   if (screen !== 'game' || !$('wiki').hidden) return;
   const k = {arrowup: 'u', w: 'u', arrowdown: 'd', s: 'd', arrowleft: 'l', a: 'l', arrowright: 'r', d: 'r', ' ': 'b'}[e.key.toLowerCase()];
@@ -1627,6 +1642,25 @@ function drawGame(s, dt, now){
         if (dx) b.fillRect(ax + dx * (1 - k), ay - k, 1, w); else b.fillRect(ax - k, ay + dy * (1 - k), w, 1);
       }
       b.globalAlpha = 1;
+    }
+  }
+
+  // aim mode for the secret finisher: my reach as a faint box, targets bracketed
+  if (aim && now < aim.until && !Array.isArray(s.ul)) {
+    const mine = order.find(o => o.i === me), targets = aimTargets();
+    if (mine) {
+      const R = T.ULT_REACH, x0 = (Math.round(mine.x) - R) * TS, y0 = (Math.round(mine.y) - R) * TS, side = (2 * R + 1) * TS;
+      b.fillStyle = 'rgba(255,42,90,.08)'; b.fillRect(x0, y0, side, side);
+      b.fillStyle = 'rgba(255,42,90,.6)'; b.fillRect(x0, y0, side, 1); b.fillRect(x0, y0 + side - 1, side, 1); b.fillRect(x0, y0, 1, side); b.fillRect(x0 + side - 1, y0, 1, side);
+    }
+    const pulse = reduce ? 0 : ((now / 120) | 0) & 1;
+    for (const o of order) {
+      if (!targets.includes(o.i)) continue;
+      const X = Math.round(o.x * TS) - 1 - pulse, Y = Math.round(o.y * TS) - 4 - pulse, Z = 18 + pulse * 2;
+      b.fillStyle = '#ff2a5a';
+      for (const [cx, cy, sx, sy] of [[X, Y, 1, 1], [X + Z, Y, -1, 1], [X, Y + Z, 1, -1], [X + Z, Y + Z, -1, -1]]) {
+        b.fillRect(sx > 0 ? cx : cx - 4, cy, 5, 1); b.fillRect(cx, sy > 0 ? cy : cy - 4, 1, 5);   // corner brackets
+      }
     }
   }
 
