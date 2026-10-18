@@ -362,7 +362,7 @@ const T = {
   SWIPE_PX: 22, TAP_MS: 320,
   NET_HZ: 20, HOST_TIMEOUT: 6,
   AMBIENT: 'rgb(112,100,150)',   // how dark the unlit field is (lower = darker)
-  RACE_TIME: 30,          // seconds allowed for a respawn wikirace at the start of a round,
+  RACE_TIME: 40,          // seconds allowed for a respawn wikirace at the start of a round,
   RACE_DECAY: 0.8,        // multiplied by this every RACE_DECAY_EVERY seconds of play
   RACE_DECAY_EVERY: 15,
   RESPAWN_DECAY: 0.75,    // and by this after every respawn
@@ -660,7 +660,7 @@ function update(dt){
   if (!S.shrinkDone && !S.warn && S.elapsed >= S.shrinkAt - T.SHRINK_WARN) { S.warn = nextRing(); if (!S.warn) S.shrinkDone = true; }
   if (S.warn && S.elapsed >= S.shrinkAt) closeRing();
   if (S.time < -120) for (const p of S.players) if (p) p.alive = false;   // overtime cap: call it a draw
-  // Wikirace time shrinks as the round goes on; racers who run out stay dead.
+  // Wikirace time shrinks as the round goes on; racers who run out stay dead until a later round.
   if ((S.raceDecayAt -= dt) <= 0) { S.raceDecayAt += T.RACE_DECAY_EVERY; S.raceT *= T.RACE_DECAY; }
   for (const p of S.players) if (p && p.racing && (p.raceLeft -= dt) <= 0) { p.racing = false; p.failed = true; }
   tickBombs(dt);
@@ -671,7 +671,7 @@ function update(dt){
   }
   for (const p of S.players) if (p && p.alive && !(p.inv > 0) && S.fl[cellOf(p)] > 0) p.alive = false;
   const live = S.players.filter(p => p && p.alive);
-  if (live.length >= 2) { S.decide = null; for (const p of S.players) if (p) p.failed = false; }
+  if (live.length >= 2) S.decide = null;   // a failed or abandoned race is final for that life
   else {
     // "Wiki in 1v1": with one survivor left, wait for anyone racing back in, and give the fallen a few
     // seconds to start a race (otherwise a 1v1 would end the instant someone dies).
