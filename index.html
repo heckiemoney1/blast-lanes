@@ -1,0 +1,1264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Blast Lanes">
+<meta name="theme-color" content="#07060b">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}</style>
+<script src="peerjs.min.js"></script>
+</head>
+<body>
+<title>Blast Lanes</title>
+<style>
+  /* Layout: one-screen arcade cabinet. Menus are dark terminal cards with scanlines; the game is a
+     pixel-art field (11x13 tiles of 16px, upscaled by whole numbers) under a colored light pass. */
+  /* Committed single visual world (cyberpsycho neon): one dark palette, every color explicit. */
+  :root{
+    --bg:#07060b; --panel:#100d18; --panel2:#171225; --edge:#2a2238;
+    --ink:#e9e4f5; --dim:#7d7396;
+    --hot:#ff2a5a; --hot-deep:#8a0f2e; --cyan:#2de2e6; --warn:#fcee0a;
+    --pix:"Silkscreen", ui-monospace, monospace;
+    --term:"VT323", ui-monospace, monospace;
+    color-scheme:dark;
+  }
+  [hidden]{display:none!important}
+  html,body{height:100%}
+  body{
+    margin:0; background:radial-gradient(90% 60% at 50% 0%, #1a0710 0%, var(--bg) 70%) var(--bg);
+    color:var(--ink); font-family:var(--term); font-size:20px; overflow:hidden;
+    -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent;
+  }
+  .px{image-rendering:crisp-edges; image-rendering:pixelated}
+  .screen{
+    position:fixed; inset:0; display:flex; flex-direction:column; align-items:center;
+    padding-left:max(16px,env(safe-area-inset-left,0px));
+    padding-right:max(16px,env(safe-area-inset-right,0px));
+    padding-block:max(12px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-bottom,0px));
+    box-sizing:border-box; gap:10px; overflow-y:auto;
+  }
+  /* scanlines + slow flicker on menus only; the play field stays clean */
+  .menu::after{content:""; position:fixed; inset:0; pointer-events:none; z-index:5;
+    background:repeating-linear-gradient(180deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px);
+    animation:flicker 6s steps(1) infinite}
+  @keyframes flicker{0%,100%{opacity:1} 41%{opacity:.6} 42%{opacity:1} 77%{opacity:.8} 78%{opacity:1}}
+  .card{width:100%; max-width:420px; margin:auto 0; display:flex; flex-direction:column; gap:14px; position:relative; z-index:1}
+
+  .logo{margin:0; font-family:var(--pix); font-weight:700; font-size:clamp(38px,12vw,58px); line-height:.9; letter-spacing:1px; position:relative;
+    text-shadow:2px 0 var(--hot), -2px 0 var(--cyan)}
+  .logo span{color:var(--hot); text-shadow:2px 0 #ff9fb5, -2px 0 var(--cyan)}
+  .logo .g{position:absolute; inset:0; color:var(--ink); clip-path:inset(0 0 100% 0); animation:glitch 4.2s steps(1) infinite}
+  @keyframes glitch{
+    0%,92%,100%{clip-path:inset(0 0 100% 0); transform:none}
+    93%{clip-path:inset(18% 0 62% 0); transform:translateX(-6px)}
+    95%{clip-path:inset(55% 0 20% 0); transform:translateX(5px)}
+    97%{clip-path:inset(35% 0 45% 0); transform:translateX(-3px)}
+  }
+  .tag{margin:8px 0 0; color:var(--dim); font-size:20px; line-height:1.1}
+  .tag b{color:var(--cyan); font-weight:400}
+  .cursor{display:inline-block; width:.5em; height:.9em; background:var(--hot); vertical-align:-2px; animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  label,.lbl{display:block; font-family:var(--pix); font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--hot); margin-bottom:6px}
+  input{
+    width:100%; box-sizing:border-box; font:24px var(--term); color:var(--ink);
+    background:var(--panel); border:1px solid var(--edge); border-left:3px solid var(--cyan); padding:8px 12px; border-radius:0;
+    -webkit-user-select:text; user-select:text;
+  }
+  input:focus{outline:1px solid var(--cyan); outline-offset:2px}
+  input::placeholder{color:#4d4560}
+  #code{text-transform:uppercase; letter-spacing:10px; text-align:center}
+  .row{display:flex; gap:10px}
+  .row > *{flex:1; min-width:0}
+  button{
+    font:700 14px var(--pix); letter-spacing:1px; text-transform:uppercase; color:#12020a; background:var(--hot);
+    border:0; border-radius:0; padding:14px 14px; cursor:pointer;
+    clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px);
+    transition:transform .05s, filter .1s;
+  }
+  button:active{transform:translateY(2px); filter:brightness(1.3)}
+  button:focus-visible{outline:2px solid var(--warn); outline-offset:3px}
+  button.ghost{background:var(--panel2); color:var(--ink); box-shadow:inset 0 0 0 1px var(--edge)}
+  button:disabled{opacity:.35; pointer-events:none}
+  .or{display:flex; align-items:center; gap:10px; color:var(--dim); font-family:var(--pix); font-size:10px; letter-spacing:1px; text-transform:uppercase}
+  .or::before,.or::after{content:""; flex:1; height:1px; background:var(--edge)}
+  .note{color:var(--dim); font-size:18px; line-height:1.15; margin:0}
+  .games{display:flex; flex-direction:column; gap:8px}
+  .games button{display:flex; justify-content:space-between; align-items:center; text-align:left; gap:8px}
+  .games small{font-weight:400; opacity:.7}
+
+  /* character select */
+  .chars{display:grid; grid-template-columns:repeat(4,1fr); gap:6px}
+  .char{display:flex; flex-direction:column; align-items:center; gap:4px; padding:8px 2px 6px; background:var(--panel);
+    color:var(--dim); font:400 10px var(--pix); box-shadow:inset 0 0 0 1px var(--edge); clip-path:none; text-transform:uppercase}
+  .char canvas{width:48px; height:48px}
+  .char[aria-pressed="true"]{background:#1d0c18; color:var(--ink); box-shadow:inset 0 0 0 2px var(--hot), 0 0 18px rgba(255,42,90,.35)}
+  .char[aria-pressed="true"] canvas{animation:hop .5s steps(2) infinite}
+  @keyframes hop{50%{transform:translateY(-3px)}}
+
+  /* lobby */
+  .codebox{display:flex; flex-direction:column; align-items:center; gap:6px; padding:14px; background:var(--panel); box-shadow:inset 0 0 0 1px var(--edge)}
+  .codebox b{font:700 46px var(--pix); letter-spacing:10px; padding-left:10px; line-height:1; text-shadow:2px 0 var(--hot), -2px 0 var(--cyan)}
+  .codebox small{color:var(--dim); font-size:18px}
+  .seats{display:flex; flex-direction:column; gap:6px}
+  .seat{display:flex; align-items:center; gap:12px; padding:6px 12px; background:var(--panel); box-shadow:inset 3px 0 0 var(--c,var(--edge))}
+  .seat canvas{width:32px; height:32px; flex:none}
+  .seat span{flex:1; min-width:0; font-size:22px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .seat em{font:400 10px var(--pix); letter-spacing:1px; text-transform:uppercase; color:var(--dim); font-style:normal}
+  .seat.open{background:transparent; box-shadow:inset 0 0 0 1px var(--edge)}
+  .seat.open span{color:#4d4560}
+  .seat .ph{width:32px; height:32px; flex:none}
+
+  /* game */
+  #game{touch-action:none; gap:8px; overflow:hidden}
+  .hud{width:100%; max-width:540px; display:grid; grid-template-columns:1fr 1fr auto 1fr 1fr; gap:5px; align-items:stretch}
+  .chip{background:var(--panel); padding:4px 5px; display:flex; align-items:center; gap:5px; min-width:0; box-shadow:inset 0 -2px 0 var(--c)}
+  .chip canvas{width:24px; height:24px; flex:none}
+  .chip.dead{opacity:.3}
+  .chip.empty{visibility:hidden}
+  .chip > div{min-width:0; display:flex; flex-direction:column; gap:3px}
+  .chip span{font-size:17px; line-height:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .pips{display:flex; gap:2px}
+  .pips u{width:8px; height:4px; background:var(--edge); text-decoration:none}
+  .clock{align-self:center; font:700 16px var(--pix); font-variant-numeric:tabular-nums; padding:0 2px; text-align:center; line-height:1}
+  .clock small{display:block; font:400 9px var(--pix); letter-spacing:1px; color:var(--dim); margin-top:3px}
+  .clock.sd{color:var(--hot); text-shadow:0 0 8px var(--hot)}
+  .stage{position:relative; width:100%; max-width:540px; flex:1; min-height:0; display:flex; align-items:center; justify-content:center}
+  #cv{display:block; box-shadow:0 0 0 2px #000, 0 0 40px rgba(255,42,90,.15)}
+  .banner{position:absolute; left:0; right:0; top:50%; transform:translateY(-50%); text-align:center; pointer-events:none;
+    font:700 clamp(24px,9vw,48px) var(--pix); letter-spacing:1px; text-shadow:3px 0 rgba(255,42,90,.8), -3px 0 rgba(45,226,230,.8), 0 4px 24px #000}
+  .banner small{display:block; font:400 20px var(--term); letter-spacing:2px; text-transform:uppercase; color:var(--ink); text-shadow:0 2px 8px #000; margin-bottom:4px}
+  .hint{color:var(--dim); font-size:18px; text-align:center; display:flex; gap:12px; align-items:center; justify-content:center; width:100%; max-width:540px}
+  .hint b{color:var(--ink); font-weight:400}
+  .hint button{padding:7px 12px; font-size:11px}
+  .over{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
+    background:rgba(7,6,11,.86); padding:20px; text-align:center}
+  .over h2{margin:0; font:700 clamp(22px,7vw,36px) var(--pix); text-shadow:2px 0 var(--hot), -2px 0 var(--cyan)}
+  .over p{margin:0; color:var(--dim)}
+  .over .row{width:100%; max-width:320px}
+  .toast{position:fixed; left:50%; bottom:max(24px,env(safe-area-inset-bottom,0px)); transform:translateX(-50%);
+    background:var(--panel2); box-shadow:inset 3px 0 0 var(--hot); padding:8px 14px; font-size:20px; z-index:9; max-width:calc(100% - 40px)}
+  @media (prefers-reduced-motion:reduce){.menu::after,.logo .g,.cursor,.char[aria-pressed="true"] canvas{animation:none}}
+</style>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&family=VT323&display=swap" rel="stylesheet">
+
+<!-- HOME -->
+<section class="screen menu" id="home">
+  <div class="card">
+    <div>
+      <h1 class="logo" aria-label="Blast Lanes">BLAST<br><span>LANES</span><i class="g" aria-hidden="true">BLAST<br>LANES</i></h1>
+      <p class="tag">&gt; 2–4 players, one phone each<br>&gt; <b>swipe</b> = 1 tile · <b>tap</b> = bomb · first to 3 <i class="cursor"></i></p>
+    </div>
+    <div>
+      <span class="lbl">// Pick your fighter</span>
+      <div class="chars" id="chars"></div>
+    </div>
+    <div>
+      <label for="name">// Name</label>
+      <input id="name" maxlength="12" autocomplete="off" placeholder="PLAYER">
+    </div>
+    <div class="row">
+      <button id="hostBtn">Host game</button>
+      <button id="practiceBtn" class="ghost">Practice</button>
+    </div>
+    <div class="or">or join a friend</div>
+    <div class="row">
+      <input id="code" maxlength="4" autocomplete="off" autocapitalize="characters" placeholder="CODE" aria-label="Room code">
+      <button id="joinBtn" class="ghost" style="flex:0 0 auto">Join</button>
+    </div>
+    <div class="games" id="games"></div>
+    <p class="note" id="netNote" hidden>Online play isn't available here right now. Practice against bots still works.</p>
+  </div>
+</section>
+
+<!-- LOBBY -->
+<section class="screen menu" id="lobby" hidden>
+  <div class="card">
+    <div class="codebox" id="codebox"><span class="lbl" style="margin:0">// Room code</span><b id="roomCode">----</b><small>friends enter this on their phone</small></div>
+    <div class="seats" id="seats"></div>
+    <div class="row" id="botRow">
+      <button id="addBot" class="ghost">Add bot</button>
+      <button id="dropBot" class="ghost">Remove bot</button>
+    </div>
+    <button id="startBtn">Start match</button>
+    <p class="note" id="lobbyNote"></p>
+    <button id="leaveLobby" class="ghost">Leave</button>
+  </div>
+</section>
+
+<!-- GAME -->
+<section class="screen" id="game" hidden>
+  <div class="hud" id="hud"></div>
+  <div class="stage" id="stage">
+    <canvas id="cv"></canvas>
+    <div class="banner" id="banner"></div>
+    <div class="over" id="over" hidden>
+      <h2 id="overTitle"></h2>
+      <p id="overSub"></p>
+      <div class="row" id="overHost">
+        <button id="rematchBtn">Rematch</button>
+        <button id="toLobbyBtn" class="ghost">Lobby</button>
+      </div>
+      <button id="leaveOver" class="ghost">Leave</button>
+    </div>
+  </div>
+  <div class="hint"><span><b>swipe</b> step · <b>tap</b> bomb</span><button id="leaveGame" class="ghost">Quit</button></div>
+</section>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+// ---- Tunables (the feel lives here) -----------------------------------------
+const T = {
+  SPEED: 4.8, SPEED_UP: 0.7, MAX_SPEED: 8.4,   // tiles/sec while stepping
+  QUEUE: 2,               // swipes you can stack while a step is in progress
+  FUSE: 2.4, FLAME: 0.55, // seconds
+  START_BOMBS: 1, START_RANGE: 2, MAX_BOMBS: 8, MAX_RANGE: 8,
+  SOFT: 0.72, DROP: 0.4,  // soft-block density, power-up chance per block
+  ROUND_TIME: 120,        // then sudden death: the arena fills in from the edge
+  SHRINK_EVERY: 0.35,
+  WINS: 3, COUNTDOWN: 3, ROUND_PAUSE: 3.2,
+  BOT_THINK: 0.14,
+  SWIPE_PX: 22, TAP_MS: 320,
+  NET_HZ: 20, HOST_TIMEOUT: 6,
+  AMBIENT: 'rgb(112,100,150)',   // how dark the unlit field is (lower = darker)
+};
+const W = 11, H = 13, N = W * H;                       // portrait field for phones
+const COLORS = ['#2de2e6', '#ff2a6d', '#fcee0a', '#7dff6a'];   // seat colors: rings, lights, HUD
+const CNAMES = ['Cyan', 'Pink', 'Yellow', 'Green'];
+const SPAWN = [[1, H - 2], [W - 2, 1], [W - 2, H - 2], [1, 1]]; // seats 0 and 1 start on opposite corners
+const DIR = {u: [0, -1], d: [0, 1], l: [-1, 0], r: [1, 0]};
+const $ = id => document.getElementById(id);
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const store = {
+  get(k){ try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v){ try { localStorage.setItem(k, v); } catch {} },
+};
+const cleanName = s => (typeof s === 'string' ? s : '').replace(/[^\p{L}\p{N} _.'-]/gu, '').trim().slice(0, 12);
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const chOf = v => (Number.isInteger(v) && v >= 0 && v < 8) ? v : 0;
+
+// Sudden death fills the field ring by ring, outside in.
+const SPIRAL = (() => {
+  const out = []; let x0 = 1, y0 = 1, x1 = W - 2, y1 = H - 2;
+  while (x0 <= x1 && y0 <= y1) {
+    for (let x = x0; x <= x1; x++) out.push(y0 * W + x);
+    for (let y = y0 + 1; y <= y1; y++) out.push(y * W + x1);
+    if (y0 < y1) for (let x = x1 - 1; x >= x0; x--) out.push(y1 * W + x);
+    if (x0 < x1) for (let y = y1 - 1; y > y0; y--) out.push(y * W + x0);
+    x0++; y0++; x1--; y1--;
+  }
+  return out;
+})();
+
+// ---- Simulation (runs only on the host's phone, or locally in practice) ----
+let S = null;
+
+function lobbyState(seats){
+  return {ph: 'lobby', seats, wins: [0, 0, 0, 0], acks: [0, 0, 0, 0], rd: 0, last: -1, champ: -1, boom: 0};
+}
+function makeGrid(){
+  const g = new Array(N).fill(0);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++)
+    if (x === 0 || y === 0 || x === W - 1 || y === H - 1 || (x % 2 === 0 && y % 2 === 0)) g[y * W + x] = 1;
+  const keep = new Set();
+  for (const [sx, sy] of SPAWN) for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) keep.add((sy + dy) * W + sx + dx);
+  for (let i = 0; i < N; i++) if (g[i] === 0 && !keep.has(i) && Math.random() < T.SOFT) g[i] = 2;
+  return g;
+}
+function mkPlayer(slot){
+  const [x, y] = SPAWN[slot];
+  return {slot, x, y, tx: x, ty: y, moving: false, q: [], face: 'd', alive: true,
+    bombs: T.START_BOMBS, range: T.START_RANGE, speed: T.SPEED, think: 0.4};
+}
+function newMatch(){
+  S.seats = S.seats.map(s => (s && !s.gone) ? s : null);
+  S.wins = [0, 0, 0, 0]; S.rd = 0; S.champ = -1;
+  nextRound();
+}
+function nextRound(){
+  S.rd++; S.g = makeGrid(); S.fl = new Float32Array(N); S.bombs = []; S.ups = [];
+  S.players = S.seats.map((s, i) => {
+    if (!s) return null;
+    const p = mkPlayer(i); if (s.gone) p.alive = false; return p;
+  });
+  S.time = T.ROUND_TIME; S.cd = T.COUNTDOWN; S.ph = 'count'; S.shrinkI = 0; S.shrinkT = 0; S.last = -1;
+}
+function toLobby(){ S.seats = S.seats.map(s => (s && !s.gone) ? s : null); Object.assign(S, {ph: 'lobby', wins: [0, 0, 0, 0], rd: 0, last: -1, champ: -1}); }
+
+const cellOf = p => Math.round(p.y) * W + Math.round(p.x);
+const bombAt = i => S.bombs.some(b => b.y * W + b.x === i);
+const canEnter = i => S.g[i] === 0 && !bombAt(i);
+
+function doAct(slot, a){
+  const p = S.players && S.players[slot];
+  if (!p || !p.alive || S.ph !== 'play') return;
+  if (a === 'b') dropBomb(p);
+  else if (DIR[a] && p.q.length < T.QUEUE) p.q.push(a);
+}
+function dropBomb(p){
+  const i = cellOf(p);
+  if (S.g[i] !== 0 || bombAt(i)) return false;
+  if (S.bombs.filter(b => b.owner === p.slot).length >= p.bombs) return false;
+  S.bombs.push({x: i % W, y: (i / W) | 0, t: T.FUSE, owner: p.slot, range: p.range});
+  return true;
+}
+// One swipe = one tile. Leftover movement carries into the next queued step so chains feel continuous.
+function stepPlayer(p, dt){
+  let rem = p.speed * dt;
+  while (rem > 0) {
+    if (!p.moving) {
+      if (!p.q.length) return;
+      const d = p.q.shift(); p.face = d;
+      const [dx, dy] = DIR[d], nx = p.x + dx, ny = p.y + dy;
+      if (!canEnter(ny * W + nx)) continue;
+      p.tx = nx; p.ty = ny; p.moving = true;
+    }
+    const dist = Math.abs(p.tx - p.x) + Math.abs(p.ty - p.y), m = Math.min(rem, dist);
+    p.x += Math.sign(p.tx - p.x) * m; p.y += Math.sign(p.ty - p.y) * m; rem -= m;
+    if (m >= dist - 1e-9) { p.x = p.tx; p.y = p.ty; p.moving = false; pickUp(p); }
+  }
+}
+function pickUp(p){
+  const i = cellOf(p), k = S.ups.findIndex(u => u.i === i);
+  if (k < 0) return;
+  const u = S.ups.splice(k, 1)[0];
+  if (u.t === 0) p.bombs = Math.min(T.MAX_BOMBS, p.bombs + 1);
+  else if (u.t === 1) p.range = Math.min(T.MAX_RANGE, p.range + 1);
+  else p.speed = Math.min(T.MAX_SPEED, p.speed + T.SPEED_UP);
+}
+function tickBombs(dt){
+  for (const b of S.bombs) b.t -= dt;
+  let again = true;
+  while (again) { again = false; for (const b of S.bombs) if (b.t <= 0 && !b.done) { b.done = true; again = true; explode(b); } }
+  S.bombs = S.bombs.filter(b => !b.done);
+}
+function explode(b){
+  S.boom++;
+  const hit = [b.y * W + b.x];
+  for (const [dx, dy] of Object.values(DIR)) {
+    for (let r = 1; r <= b.range; r++) {
+      const x = b.x + dx * r, y = b.y + dy * r, i = y * W + x;
+      if (S.g[i] === 1) break;
+      hit.push(i);
+      if (S.g[i] === 2) { S.g[i] = 0; maybeDrop(i); break; }        // revealed power-up survives this blast
+      const k = S.ups.findIndex(u => u.i === i); if (k >= 0) S.ups.splice(k, 1);
+      const chain = S.bombs.find(o => !o.done && o.x === x && o.y === y);
+      if (chain) { chain.t = 0; break; }
+    }
+  }
+  for (const i of hit) S.fl[i] = T.FLAME;
+}
+function maybeDrop(i){
+  if (Math.random() >= T.DROP) return;
+  const r = Math.random();
+  S.ups.push({i, t: r < 0.38 ? 0 : r < 0.72 ? 1 : 2});
+}
+function update(dt){
+  if (!S || S.ph === 'lobby' || S.ph === 'match') return;
+  for (let i = 0; i < N; i++) if (S.fl[i] > 0) S.fl[i] -= dt;
+  if (S.ph === 'count') { S.cd -= dt; if (S.cd <= 0) S.ph = 'play'; return; }
+  if (S.ph === 'round') { S.pause -= dt; if (S.pause <= 0) { if (S.champ >= 0) S.ph = 'match'; else nextRound(); } return; }
+  S.time -= dt;
+  if (S.time <= 0) {
+    S.shrinkT -= dt;
+    while (S.shrinkT <= 0 && S.shrinkI < SPIRAL.length) {
+      S.shrinkT += T.SHRINK_EVERY;
+      const i = SPIRAL[S.shrinkI++];
+      S.g[i] = 1; S.fl[i] = 0;
+      S.bombs = S.bombs.filter(b => b.y * W + b.x !== i);
+      S.ups = S.ups.filter(u => u.i !== i);
+      for (const p of S.players) if (p && p.alive && cellOf(p) === i) p.alive = false;
+    }
+  }
+  tickBombs(dt);
+  for (const p of S.players) if (p && p.alive) {
+    if (S.seats[p.slot] && S.seats[p.slot].kind === 'b') botThink(p, dt);
+    stepPlayer(p, dt);
+  }
+  for (const p of S.players) if (p && p.alive && S.fl[cellOf(p)] > 0) p.alive = false;
+  const live = S.players.filter(p => p && p.alive);
+  if (live.length <= 1) {
+    S.last = live.length ? live[0].slot : -1;
+    if (S.last >= 0 && ++S.wins[S.last] >= T.WINS) S.champ = S.last;
+    S.ph = 'round'; S.pause = T.ROUND_PAUSE;
+  }
+}
+
+// ---- Bots ---------------------------------------------------------------------
+function dangerMap(extra){
+  const d = new Uint8Array(N);
+  for (const b of extra ? S.bombs.concat([extra]) : S.bombs) {
+    d[b.y * W + b.x] = 1;
+    for (const [dx, dy] of Object.values(DIR)) for (let r = 1; r <= b.range; r++) {
+      const i = (b.y + dy * r) * W + b.x + dx * r;
+      if (S.g[i] === 1) break; d[i] = 1; if (S.g[i] === 2) break;
+    }
+  }
+  for (let i = 0; i < N; i++) if (S.fl[i] > 0) d[i] = 1;
+  return d;
+}
+// Breadth-first search; returns the first direction toward the nearest cell where goal(i) holds.
+function firstStep(from, goal, pass){
+  const prev = new Int16Array(N).fill(-1), via = []; prev[from] = from;
+  const q = [from], order = shuffle(Object.keys(DIR));
+  for (let h = 0; h < q.length; h++) {
+    const c = q[h];
+    if (c !== from && goal(c)) { let k = c; while (prev[k] !== from) k = prev[k]; return via[k]; }
+    for (const d of order) {
+      const n = c + DIR[d][1] * W + DIR[d][0];
+      if (prev[n] !== -1 || !pass(n)) continue;
+      prev[n] = c; via[n] = d; q.push(n);
+    }
+  }
+  return null;
+}
+function enemyNear(p, i, reach){
+  const x = i % W, y = (i / W) | 0;
+  return S.players.some(o => o && o.alive && o !== p && Math.abs(Math.round(o.x) - x) + Math.abs(Math.round(o.y) - y) <= reach);
+}
+function wantsBomb(p, i){
+  for (const [dx, dy] of Object.values(DIR)) if (S.g[i + dy * W + dx] === 2) return true;
+  const x = i % W, y = (i / W) | 0;
+  for (const o of S.players) {
+    if (!o || !o.alive || o === p) continue;
+    const ox = Math.round(o.x), oy = Math.round(o.y);
+    if ((ox === x && Math.abs(oy - y) <= p.range) || (oy === y && Math.abs(ox - x) <= p.range)) {
+      const [sx, sy] = [Math.sign(ox - x), Math.sign(oy - y)]; let clear = true;
+      for (let k = 1; k < Math.abs(ox - x) + Math.abs(oy - y); k++) if (S.g[(y + sy * k) * W + x + sx * k] !== 0) clear = false;
+      if (clear) return true;
+    }
+  }
+  return false;
+}
+function botThink(p, dt){
+  p.think -= dt;
+  if (p.think > 0 || p.moving || p.q.length) return;
+  p.think = T.BOT_THINK * (0.6 + Math.random() * 0.8);
+  const here = cellOf(p), dz = dangerMap();
+  const free = i => S.g[i] === 0 && !bombAt(i) && !(S.fl[i] > 0);
+  if (dz[here]) { const s = firstStep(here, i => !dz[i], free); if (s) p.q.push(s); return; }
+  if (S.bombs.filter(b => b.owner === p.slot).length < p.bombs && wantsBomb(p, here) && Math.random() < 0.9) {
+    const dz2 = dangerMap({x: here % W, y: (here / W) | 0, range: p.range});
+    const s = firstStep(here, i => !dz2[i], free);
+    if (s && dropBomb(p)) { p.q.push(s); return; }
+  }
+  if (Math.random() < 0.08) return;
+  const safe = i => free(i) && !dz[i];
+  const s = firstStep(here, i => S.ups.some(u => u.i === i), safe)
+    || firstStep(here, i => Object.values(DIR).some(([dx, dy]) => S.g[i + dy * W + dx] === 2) || enemyNear(p, i, 2), safe);
+  if (s) p.q.push(s);
+}
+
+// ---- Snapshot: the one format both the host screen and remote phones draw from --
+function encode(){
+  const s = {ph: S.ph, rd: S.rd, w: S.wins, k: S.acks, last: S.last, champ: S.champ,
+    seat: S.seats.map(x => x ? [x.name, x.kind, x.peer || 0, x.gone ? 1 : 0, x.ch | 0] : 0)};
+  if (S.ph === 'lobby') return s;
+  s.g = S.g.join('');
+  s.tm = Math.ceil(S.time * 10); s.cd = Math.ceil(S.cd * 10); s.bx = S.boom;
+  s.p = S.players.map(p => p ? [Math.round(p.x * 100), Math.round(p.y * 100), p.alive ? 1 : 0, p.bombs, p.range, p.face] : 0);
+  s.b = S.bombs.map(b => [b.x, b.y, Math.round(b.t * 100)]);
+  s.f = []; for (let i = 0; i < N; i++) if (S.fl[i] > 0) s.f.push(i, Math.round(S.fl[i] * 100));
+  s.u = S.ups.flatMap(u => [u.i, u.t]);
+  return s;
+}
+
+// ---- Network: presence-only, so nobody needs edit rights to play ---------------
+// Host presence  {r:'h', s:snapshot}  ~20x/sec.
+// Player presence {r:'p', nm:name, ch:character, a:[[seq,act],...]}: recent inputs, trimmed once the host acks them.
+const NET = {room: null, game: null, role: null, code: null, myPeer: null, seq: 0, pend: [],
+  seenHost: 0, joinedAt: 0, lastHostPres: null, sentJson: '', netT: 0, lobbyKey: ''};
+let snap = null;
+
+$('hostBtn').disabled = $('joinBtn').disabled = $('code').disabled = true;   // until we know online play works here
+(async () => {
+  let room = null;
+  try { room = window.claude && window.claude.use ? await window.claude.use('room') : null; } catch { room = null; }
+  if (!room && !window.claude && window.Peer) room = peerNet();   // hosted outside claude.ai: phones connect directly
+  NET.room = room;
+  $('netNote').hidden = !!room;
+  $('hostBtn').disabled = $('joinBtn').disabled = $('code').disabled = !room;
+  if (room) room.onPeers(renderGames, () => { NET.room = null; renderGames(); });
+})();
+
+// PeerJS stand-in with the room capability's shape (join -> presence/peers/leave), so the
+// game code doesn't care which one it runs on. Star layout: the first phone to claim a
+// code's id is the hub and relays everyone's presence; joiners connect to it.
+function peerNet(){
+  const OPTS = window.BL_PEER_OPTS || {};
+  const openPeer = id => new Promise((res, rej) => {
+    const p = id ? new Peer(id, OPTS) : new Peer(OPTS);
+    const fail = e => { p.off('open', ok); p.destroy(); rej(e); };
+    const ok = () => { p.off('error', fail); res(p); };
+    p.once('open', ok); p.once('error', fail);
+  });
+  async function join(name){
+    const id = 'blastlanes-' + name, pres = new Map(), conns = new Map();
+    let peer, hub = true, mine = {}, list = Object.freeze([]);
+    try { peer = await openPeer(id); }
+    catch (e) { if (e.type !== 'unavailable-id') throw e; hub = false; peer = await openPeer(null); }
+    const me = peer.id;
+    const rebuild = () => { list = Object.freeze([...pres].map(([pid, v]) => Object.freeze(
+      {peer: pid, by: null, isMe: pid === me, sameTab: pid === me, kind: 'viewer', guest: false, presence: v, updatedAt: Date.now()}))); };
+    const send = (c, m) => { try { if (c.open) c.send(m); } catch {} };
+    const plain = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+    pres.set(me, mine); rebuild();
+    const wire = c => {
+      c.on('data', m => {
+        if (!plain(m)) return;
+        if (hub) {
+          if (m.t !== 'p' || !plain(m.pres)) return;
+          pres.set(c.peer, m.pres); rebuild();
+          for (const [k, o] of conns) if (k !== c.peer) send(o, {t: 'p', peer: c.peer, pres: m.pres});
+        } else if (m.t === 'p' && typeof m.peer === 'string' && plain(m.pres)) { pres.set(m.peer, m.pres); rebuild(); }
+        else if (m.t === 'bye' && m.peer !== me) { pres.delete(m.peer); rebuild(); }
+        else if (m.t === 'all' && Array.isArray(m.list)) { for (const e of m.list) if (Array.isArray(e) && e[0] !== me && plain(e[1])) pres.set(e[0], e[1]); rebuild(); }
+      });
+      c.on('close', () => {
+        conns.delete(c.peer);
+        if (hub) { pres.delete(c.peer); for (const o of conns.values()) send(o, {t: 'bye', peer: c.peer}); }
+        else for (const k of [...pres.keys()]) if (k !== me) pres.delete(k);   // lost the hub
+        rebuild();
+      });
+    };
+    peer.on('error', () => {});
+    if (hub) peer.on('connection', c => { conns.set(c.peer, c); wire(c); c.on('open', () => send(c, {t: 'all', list: [...pres]})); });
+    else { const c = peer.connect(id, {reliable: true}); conns.set(id, c); wire(c); c.on('open', () => send(c, {t: 'p', pres: mine})); }
+    return {
+      name, hub,
+      peers: () => list,
+      async presence(patch){
+        mine = Object.assign({}, mine);
+        for (const k in patch) { if (patch[k] === null) delete mine[k]; else mine[k] = patch[k]; }
+        pres.set(me, mine); rebuild();
+        for (const c of conns.values()) send(c, hub ? {t: 'p', peer: me, pres: mine} : {t: 'p', pres: mine});
+      },
+      async leave(){ for (const c of conns.values()) try { c.close(); } catch {} peer.destroy(); },
+    };
+  }
+  // No shared lobby without a server, so the open-games list stays empty; codes still work.
+  return {join, peers: () => [], onPeers: () => () => {}, presence: async () => {}};
+}
+
+function myName(){ return cleanName($('name').value) || 'Player'; }
+let myChar = chOf(parseInt(store.get('bl-char'), 10));
+function botSeat(seats, i){
+  const used = new Set(seats.filter(Boolean).map(s => s.ch));
+  const free = [0, 1, 2, 3, 4, 5, 6, 7].filter(c => !used.has(c));
+  return {kind: 'b', name: CNAMES[i] + ' Bot', ch: free[(Math.random() * free.length) | 0] | 0};
+}
+
+async function hostGame(){
+  if (!NET.room) return;
+  const L = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let code = '';
+  for (let tries = 0; tries < 3 && !NET.game; tries++) {
+    code = Array.from({length: 4}, () => L[(Math.random() * L.length) | 0]).join('');
+    let g;
+    try { g = await NET.room.join('bl-' + code.toLowerCase()); } catch { continue; }
+    if (g.hub === false) { g.leave(); continue; }   // code already taken by another game
+    NET.game = g;
+  }
+  if (!NET.game) return toast('Could not open a room. Check your connection and try again.');
+  NET.role = 'host'; NET.code = code; NET.sentJson = '';
+  S = lobbyState([{kind: 'h', name: myName(), ch: myChar}, null, null, null]);
+}
+function practice(){
+  NET.role = 'solo'; NET.code = null;
+  const seats = [{kind: 'h', name: myName(), ch: myChar}, null, null, null];
+  seats[1] = botSeat(seats, 1); seats[2] = botSeat(seats, 2);
+  S = lobbyState(seats);
+}
+async function joinGame(code){
+  code = (code || '').toUpperCase();
+  if (!/^[A-Z]{4}$/.test(code)) return toast('Room codes are 4 letters.');
+  if (!NET.room) return;
+  let g;
+  try { g = await NET.room.join('bl-' + code.toLowerCase()); }
+  catch { return toast('Could not join that room. Check your connection and try again.'); }
+  if (g.hub === true) { g.leave(); return toast('No game found with code ' + code + '.'); }   // nobody was hosting it
+  NET.game = g;
+  Object.assign(NET, {role: 'client', code, seq: 0, pend: [], seenHost: 0, joinedAt: performance.now(), lastHostPres: null});
+  snap = null;
+  NET.game.presence({r: 'p', nm: myName(), ch: myChar, a: []}).catch(() => {});
+  toast('Joining ' + code + '…');
+}
+function leave(msg){
+  if (NET.game) { NET.game.leave().catch(() => {}); NET.game = null; }
+  if (NET.role === 'host' && NET.room) NET.room.presence({host: null, hn: null, n: null, ph: null}).catch(() => {});
+  NET.role = null; NET.lobbyKey = ''; S = null; snap = null; endPsy(); bursts = [];
+  show('home'); renderGames();
+  if (msg) toast(msg);
+}
+
+function hostSync(){
+  const byPeer = new Map();
+  for (const p of NET.game.peers()) if (!p.sameTab && p.presence && p.presence.r === 'p') byPeer.set(p.peer, p);
+  S.seats.forEach((s, i) => {
+    if (!s || s.kind !== 'p' || byPeer.has(s.peer)) return;
+    if (S.ph === 'lobby') S.seats[i] = null;
+    else { s.gone = true; const pl = S.players && S.players[i]; if (pl) pl.alive = false; }
+  });
+  if (S.ph === 'lobby') for (const [peer, p] of byPeer) {
+    if (S.seats.some(s => s && s.peer === peer)) continue;
+    const i = S.seats.findIndex(s => !s); if (i < 0) break;
+    S.seats[i] = {kind: 'p', peer, name: cleanName(p.presence.nm) || CNAMES[i], ch: chOf(p.presence.ch)}; S.acks[i] = 0;
+  }
+  S.seats.forEach((s, i) => {
+    if (!s || s.kind !== 'p') return;
+    const p = byPeer.get(s.peer); if (!p) return;
+    s.name = cleanName(p.presence.nm) || s.name;
+    s.ch = chOf(p.presence.ch);
+    const a = p.presence.a; if (!Array.isArray(a)) return;
+    for (const e of a) {
+      if (!Array.isArray(e) || typeof e[0] !== 'number' || e[0] <= S.acks[i]) continue;
+      S.acks[i] = e[0];
+      if (typeof e[1] === 'string' && 'udlrb'.includes(e[1]) && e[1].length === 1) doAct(i, e[1]);
+    }
+  });
+  const key = [NET.code, S.seats.filter(Boolean).length, S.ph === 'lobby' ? 'lobby' : 'play', myName()].join('|');
+  if (key !== NET.lobbyKey && NET.room) {
+    NET.lobbyKey = key;
+    NET.room.presence({host: NET.code, hn: myName(), n: S.seats.filter(Boolean).length, ph: S.ph === 'lobby' ? 'lobby' : 'play'}).catch(() => {});
+  }
+}
+function hostSend(dt){
+  NET.netT -= dt; if (NET.netT > 0) return;
+  const js = JSON.stringify(snap);
+  if (js === NET.sentJson) return;
+  NET.netT = 1 / T.NET_HZ; NET.sentJson = js;
+  NET.game.presence({r: 'h', s: snap}).catch(() => {});
+}
+function clientSync(now){
+  const peers = NET.game.peers();
+  const me = peers.find(p => p.sameTab); if (me) NET.myPeer = me.peer;
+  const host = peers.find(p => !p.sameTab && p.presence && p.presence.r === 'h' && p.presence.s && typeof p.presence.s === 'object');
+  if (host) {
+    NET.seenHost = now;
+    if (host.presence !== NET.lastHostPres) {
+      NET.lastHostPres = host.presence; snap = host.presence.s;
+      const slot = mySlot(), ack = slot >= 0 && Array.isArray(snap.k) ? +snap.k[slot] || 0 : 0;
+      NET.pend = NET.pend.filter(e => e[0] > ack);
+    }
+  } else if (now - (NET.seenHost || NET.joinedAt) > T.HOST_TIMEOUT * 1000) {
+    leave(NET.seenHost ? 'The host left the game.' : 'No game found with code ' + NET.code + '.');
+  }
+}
+function mySlot(){
+  if (NET.role !== 'client') return 0;
+  if (!snap || !Array.isArray(snap.seat) || !NET.myPeer) return -1;
+  return snap.seat.findIndex(s => Array.isArray(s) && s[2] === NET.myPeer);
+}
+let lastSwipe = {d: null, t: 0};
+function sendAct(a){
+  if (!snap || snap.ph === 'lobby' || snap.ph === 'match') return;
+  if (a !== 'b') lastSwipe = {d: a, t: performance.now()};
+  if (NET.role === 'host' || NET.role === 'solo') return doAct(0, a);
+  if (NET.role !== 'client' || mySlot() < 0) return;
+  NET.pend.push([++NET.seq, a]); NET.pend = NET.pend.slice(-12);
+  NET.game.presence({a: NET.pend}).catch(() => {});
+}
+
+// ---- Pixel art -------------------------------------------------------------------
+// Sprites are text maps; '.' is transparent. Characters get an automatic 1px dark outline (Gungeon-style).
+const OUT = '#0a0710';
+const cnv = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+function sprite(rows, pal, outline){
+  const o = outline ? 1 : 0, w = rows[0].length, h = rows.length, c = cnv(w + 2 * o, h + 2 * o), g = c.getContext('2d');
+  const on = (x, y) => y >= 0 && y < h && x >= 0 && x < w && rows[y][x] !== '.';
+  if (outline) { g.fillStyle = OUT; for (let y = -1; y <= h; y++) for (let x = -1; x <= w; x++)
+    if (!on(x, y) && (on(x - 1, y) || on(x + 1, y) || on(x, y - 1) || on(x, y + 1))) g.fillRect(x + 1, y + 1, 1, 1); }
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const k = rows[y][x]; if (k === '.') continue;
+    const v = pal[k]; g.fillStyle = typeof v === 'function' ? v(x, y) : v; g.fillRect(x + o, y + o, 1, 1);
+  }
+  return c;
+}
+// Eight original fighters: 12x8 heads on a shared jacket body. T = seat color stripe.
+const CHARS = [
+  {name: 'Visor', pal: {A: '#3d4c70', B: '#232c45', C: '#3af2ff', D: '#262b40'}, head: [
+    '...AAAAAA...', '..AAAAAAAA..', '.AAAAAAAAAA.', '.ACCCCCCCCA.', '.ACwCCCCCCA.', '.BAAAAAAAAB.', '..BBBBBBBB..', '....ssss....']},
+  {name: 'Bones', pal: {A: '#2e2440', w: '#ece4cf', C: '#ff3df2', D: '#2e2440'}, head: [
+    '..AAAAAAAA..', '.AAwwwwwwAA.', '.AwwwwwwwwA.', '.AwkkwwkkwA.', '.AwkCwwkCwA.', '.AwwwkkwwwA.', '..AwkwkwkA..', '...AAAAAA...']},
+  {name: 'Oni', pal: {A: '#d9373f', C: '#ffd23f', D: '#3a1d2e'}, head: [
+    '.w........w.', '.ww.AAAA.ww.', '..AAAAAAAA..', '.AAkkAAkkAA.', '.AACkAAkCAA.', '.AAAAAAAAAA.', '.AwkwkwkwkA.', '..AAAAAAAA..']},
+  {name: 'Neko', pal: {A: '#f08bd0', B: '#ffd1ef', C: '#7dff6a', D: '#4a2f5e'}, head: [
+    '.AA......AA.', '.ABA....ABA.', '.AAAAAAAAAA.', '.AAAAAAAAAA.', '.ACCAAAACCA.', '.AAAAwwAAAA.', '..AAwkkwAA..', '...AAAAAA...']},
+  {name: 'Riot', pal: {A: '#ff4fa3', C: '#5ff8ff', D: '#1d1b2c'}, head: [
+    '...AAAAAA...', '..AAAAAAAAA.', '.AAAAAAAAAAA', '.AAsssssssAA', '.AkkkCkkkkAA', '.AAsssssssAA', '.AA.sSSSs.AA', '..A..sss..A.']},
+  {name: 'Chrome', pal: {A: '#b8c4d8', B: '#6f7c96', C: '#ff3b3b', D: '#3c4558'}, head: [
+    '....wAAA....', '..AAwAAAAA..', '.AAwAAAAAAA.', '.AkkkkkkkkA.', '.AkCkkkkCkA.', '.AkkkkkkkkA.', '.BAAAAAAAAB.', '..BkBkBkBB..']},
+  {name: 'Static', pal: {B: '#5a5f73', C: '#ff9a3c', D: '#2e2a3f', n: () => ['#e8e8f0', '#9a98aa', '#55536a', '#c8c6d8'][(Math.random() * 4) | 0]}, head: [
+    '...k....k...', '....k..k....', '.BBBBBBBBBB.', '.BnnnnnnnBB.', '.BnnnnnnnBB.', '.BnnnnnnnBC.', '.BnnnnnnnBB.', '.BBBBBBBBBB.']},
+  {name: 'Croak', pal: {A: '#5fd35a', C: '#ff4fa3', D: '#26402a'}, head: [
+    '.AAA....AAA.', 'AwkwAAAAwkwA', 'AwwwAAAAwwwA', 'CAAAAAAAAAAC', 'CAAAAAAAAAAC', 'CAkAAAAAAkAC', '.AAkkkkkkAA.', '..AAAAAAAA..']},
+];
+const BODY = ['..DDDDDDDD..', '.DDDDDDDDDD.', '.sDDTTTTDDs.', '..DDDDDDDD..'];
+const LEGS = [['...EE..EE...', '...kk..kk...'], ['..EE....EE..', '..kk....kk..']];
+const BASE_PAL = {k: '#120e1a', w: '#f4f0ff', s: '#e8b796', S: '#b97f6b', E: '#1b1726'};
+const charCache = new Map();
+function charSprite(ch, seat, leg, v){   // v: animation variant (only Static's screen noise uses it)
+  const key = ch + ':' + seat + ':' + leg + ':' + v;
+  let c = charCache.get(key);
+  if (!c) {
+    const def = CHARS[ch];
+    c = sprite(def.head.concat(BODY, LEGS[leg]), Object.assign({}, BASE_PAL, def.pal, {T: seat >= 0 ? COLORS[seat] : def.pal.C}), true);
+    charCache.set(key, c);
+  }
+  return c;
+}
+function portrait(ch, seat, size){
+  const c = cnv(16, 16); c.className = 'px';
+  c.getContext('2d').drawImage(charSprite(ch, seat, 0, 0), 1, 0);
+  if (size) c.style.width = c.style.height = size + 'px';
+  return c;
+}
+
+const TS = 16, BW = W * TS, BH = H * TS;
+// Round moods: the floor and room lights change color each round (the subtle psychedelic layer).
+const MOODS = [
+  {a: '#120a1f', b: '#170c28', neon: '#ff2a6d', neon2: '#2de2e6', wall: '#3a2c58', wallTop: '#5a4888'},
+  {a: '#09111d', b: '#0c1727', neon: '#2de2e6', neon2: '#b967ff', wall: '#273a5a', wallTop: '#3d5a88'},
+  {a: '#16090f', b: '#1d0b16', neon: '#fcee0a', neon2: '#ff2a6d', wall: '#4e2238', wallTop: '#7a3858'},
+  {a: '#08130f', b: '#0b1a14', neon: '#7dff6a', neon2: '#fcee0a', wall: '#22463a', wallTop: '#356b56'},
+];
+function rnd(seed){ let s = seed % 2147483647; if (s <= 0) s += 2147483646; return () => (s = s * 16807 % 2147483647) / 2147483647; }
+const moodArt = MOODS.map((m, mi) => {
+  const r = rnd(97 + mi * 31);
+  const floor = cnv(BW, BH), fg = floor.getContext('2d');
+  const grout = cnv(BW, BH), gg = grout.getContext('2d');
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const X = x * TS, Y = y * TS;
+    fg.fillStyle = (x + y) & 1 ? m.a : m.b; fg.fillRect(X, Y, TS, TS);
+    fg.fillStyle = 'rgba(255,255,255,.035)'; fg.fillRect(X, Y, TS, 1); fg.fillRect(X, Y, 1, TS);
+    fg.fillStyle = 'rgba(0,0,0,.25)'; fg.fillRect(X, Y + TS - 1, TS, 1); fg.fillRect(X + TS - 1, Y, 1, TS);
+    for (let k = 0; k < 4; k++) { fg.fillStyle = r() < .5 ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.18)'; fg.fillRect(X + 2 + ((r() * 12) | 0), Y + 2 + ((r() * 12) | 0), 1, 1); }
+    gg.fillStyle = m.neon; gg.fillRect(X, Y + TS - 1, TS, 1); gg.fillRect(X + TS - 1, Y, 1, TS);
+  }
+  const wall = cnv(TS, TS), wg = wall.getContext('2d');
+  wg.fillStyle = m.wallTop; wg.fillRect(0, 0, TS, 11);
+  wg.fillStyle = 'rgba(255,255,255,.12)'; wg.fillRect(0, 0, TS, 1); wg.fillRect(0, 0, 1, 11);
+  wg.fillStyle = 'rgba(0,0,0,.25)'; wg.fillRect(TS - 1, 0, 1, 11); wg.fillRect(3, 4, 4, 1); wg.fillRect(9, 8, 4, 1);
+  wg.fillStyle = m.wall; wg.fillRect(0, 11, TS, 5);
+  wg.fillStyle = m.neon; wg.globalAlpha = .8; wg.fillRect(0, 11, TS, 1); wg.globalAlpha = 1;
+  wg.fillStyle = 'rgba(0,0,0,.35)'; wg.fillRect(0, 15, TS, 1);
+  return {floor, grout, wall};
+});
+const CRATE = (() => {
+  const c = cnv(TS, TS), g = c.getContext('2d');
+  g.fillStyle = OUT; g.fillRect(1, 1, 14, 15);
+  g.fillStyle = '#4a3566'; g.fillRect(2, 2, 12, 10);
+  g.fillStyle = '#634a88'; g.fillRect(2, 2, 12, 1); g.fillRect(2, 2, 1, 10);
+  g.fillStyle = '#2f2142'; g.fillRect(2, 5, 12, 1); g.fillRect(2, 8, 12, 1); g.fillRect(4, 3, 1, 2); g.fillRect(10, 6, 1, 2); g.fillRect(6, 9, 1, 3);
+  g.fillStyle = '#2a1d3c'; g.fillRect(2, 12, 12, 3);
+  for (let x = 2; x < 14; x += 4) { g.fillStyle = '#f9c80e'; g.fillRect(x, 12, 2, 3); }
+  g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(2, 14, 12, 1);
+  return c;
+})();
+const BOMB = ['#3a3058', '#ff2a5a'].map(body => sprite([
+  '..........', '...kkkk...', '..kbbbbk..', '.kbwbbbbk.', '.kbwbbbbbk'.slice(0, 10), '.kbbbbbbk.', '.kbbbbbbk.', '..kbbbbk..', '...kkkk...', '..........'
+].map(r => r.padEnd(10, '.')), {k: '#0e0a16', b: body, w: '#8a7fb5'}, true));
+const UPS = [
+  sprite(['......y...', '.....k....', '...kkkk...', '..kbbbbk..', '.kbwbbbbk.', '.kbbbbbbk.', '.kbbbbbbk.', '..kbbbbk..', '...kkkk...'],
+    {y: '#ffe08a', k: '#0e0a16', b: '#ff2a6d', w: '#ffc2d6'}, true),
+  sprite(['....r.....', '....rr....', '...rrr.r..', '..rroorr..', '..rooyor..', '.rroyyorr.', '.royywyor.', '.royyyyor.', '..roooor..', '...rrrr...'],
+    {r: '#ff2a5a', o: '#ff7a1a', y: '#ffd23f', w: '#fff6d5'}, true),
+  sprite(['.....yyy..', '....yyy...', '...yyy....', '..yyyyyy..', '.....yy...', '....yy....', '...yy.....', '..yy......'],
+    {y: '#2de2e6'}, true),
+];
+const UP_GLOW = ['#ff2a6d', '#ff7a1a', '#2de2e6'];
+// Flames: 3 shapes (center, horizontal arm, vertical arm) x 4 frames, noisy heat ramps.
+const FIRE = [0, 1, 2].map(kind => [0, 1, 2, 3].map(f => {
+  const c = cnv(TS, TS), g = c.getContext('2d'), r = rnd(7 + f * 977 + kind * 131);
+  for (let y = 0; y < TS; y++) for (let x = 0; x < TS; x++) {
+    const dx = Math.abs(x - 7.5), dy = Math.abs(y - 7.5);
+    let v = kind === 0 ? 1.15 - Math.hypot(dx, dy) / 8 : kind === 1 ? 1 - dy / 6.5 : 1 - dx / 6.5;
+    v += (r() - .5) * .4;
+    const col = v > .85 ? '#fff6d5' : v > .62 ? '#ffd23f' : v > .38 ? '#ff7a1a' : v > .16 ? '#ff2a5a' : null;
+    if (col) { g.fillStyle = col; g.fillRect(x, y, 1, 1); }
+  }
+  return c;
+}));
+const VIGNETTE = (() => {
+  const c = cnv(BW, BH), g = c.getContext('2d');
+  const gr = g.createRadialGradient(BW / 2, BH / 2, BH * .32, BW / 2, BH / 2, BH * .72);
+  gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(1, 'rgba(0,0,0,.6)');
+  g.fillStyle = gr; g.fillRect(0, 0, BW, BH); return c;
+})();
+function splat(color){   // death decal in the fallen player's seat color
+  const c = cnv(20, 20), g = c.getContext('2d'), r = rnd((Math.random() * 1e9) | 0);
+  g.fillStyle = color; g.globalAlpha = .55;
+  for (let k = 0; k < 26; k++) { const a = r() * 6.28, d = r() * 7; g.fillRect(10 + Math.cos(a) * d | 0, 10 + Math.sin(a) * d | 0, 2 + (r() * 3 | 0), 2 + (r() * 3 | 0)); }
+  for (let k = 0; k < 5; k++) { const x = 3 + (r() * 14) | 0; g.fillRect(x, 10, 1, 4 + (r() * 6 | 0)); }
+  return c;
+}
+
+// ---- Screens ------------------------------------------------------------------
+let screen = 'home';
+function show(id){ if (screen === id) return; screen = id; for (const s of ['home', 'lobby', 'game']) $(s).hidden = s !== id; if (id === 'game') layout(); }
+let toastT = 0;
+function toast(msg){ const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2800); }
+
+function renderChars(){
+  const box = $('chars'); box.textContent = '';
+  CHARS.forEach((c, i) => {
+    const b = document.createElement('button'); b.className = 'char'; b.type = 'button';
+    b.setAttribute('aria-pressed', String(i === myChar));
+    b.append(portrait(i, -1), c.name);
+    b.onclick = () => { myChar = i; store.set('bl-char', String(i)); renderChars(); };
+    box.append(b);
+  });
+}
+renderChars();
+
+function renderGames(){
+  const box = $('games'); box.textContent = '';
+  if (!NET.room || NET.role) return;
+  for (const p of NET.room.peers()) {
+    const pr = p.presence || {};
+    if (p.sameTab || typeof pr.host !== 'string' || !/^[A-Z]{4}$/.test(pr.host) || pr.ph !== 'lobby') continue;
+    const b = document.createElement('button'); b.className = 'ghost';
+    const a = document.createElement('span'); a.textContent = (cleanName(pr.hn) || 'Someone') + "'s game";
+    const c = document.createElement('small'); c.textContent = pr.host + ' · ' + Math.min(4, +pr.n || 1) + '/4';
+    b.append(a, c); b.onclick = () => { audio(); joinGame(pr.host); };
+    box.append(b);
+  }
+}
+let lobbyKey = '';
+function renderLobby(s){
+  const seats = Array.isArray(s.seat) ? s.seat : [], me = mySlot();
+  const authority = NET.role === 'host' || NET.role === 'solo';
+  const key = JSON.stringify([seats, me, NET.role, NET.code]);
+  if (key === lobbyKey) return; lobbyKey = key;
+  $('codebox').hidden = NET.role === 'solo';
+  $('roomCode').textContent = NET.code || '';
+  const box = $('seats'); box.textContent = '';
+  for (let i = 0; i < 4; i++) {
+    const st = seats[i], row = document.createElement('div');
+    row.className = 'seat' + (st ? '' : ' open');
+    if (st) row.style.setProperty('--c', COLORS[i]);
+    const nm = document.createElement('span'), tag = document.createElement('em');
+    let pic;
+    if (st) { pic = portrait(chOf(st[4]), i); nm.textContent = cleanName(st[0]) || CNAMES[i]; tag.textContent = i === me ? 'You' : st[1] === 'h' ? 'Host' : st[1] === 'b' ? 'Bot' : ''; }
+    else { pic = document.createElement('i'); pic.className = 'ph'; nm.textContent = NET.role === 'solo' ? 'empty' : 'waiting for a player…'; }
+    row.append(pic, nm, tag); box.append(row);
+  }
+  const count = seats.filter(Boolean).length;
+  $('botRow').hidden = $('startBtn').hidden = !authority;
+  $('addBot').disabled = count >= 4;
+  $('dropBot').disabled = !seats.some(x => x && x[1] === 'b');
+  $('startBtn').disabled = count < 2;
+  $('lobbyNote').textContent = authority
+    ? (count < 2 ? 'Need at least 2 players. Add a bot or wait for friends.' : 'Ready when you are.')
+    : (me < 0 ? 'Lobby is full. You can watch and join the next match.' : 'Waiting for the host to start.');
+}
+
+// ---- Input --------------------------------------------------------------------
+const dirOf = (dx, dy) => Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'r' : 'l') : (dy > 0 ? 'd' : 'u');
+const touches = new Map();
+const surf = $('game');
+surf.addEventListener('touchstart', e => {
+  if (e.target.closest('button')) return;
+  e.preventDefault(); audio();
+  for (const t of e.changedTouches) touches.set(t.identifier, {x: t.clientX, y: t.clientY, t: performance.now(), fired: false});
+}, {passive: false});
+surf.addEventListener('touchmove', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const s = touches.get(t.identifier); if (!s || s.fired) continue;
+    const dx = t.clientX - s.x, dy = t.clientY - s.y;
+    if (Math.hypot(dx, dy) > T.SWIPE_PX) { s.fired = true; sendAct(dirOf(dx, dy)); }
+  }
+}, {passive: false});
+const endTouch = e => {
+  for (const t of e.changedTouches) {
+    const s = touches.get(t.identifier); touches.delete(t.identifier);
+    if (s && !s.fired && e.type === 'touchend' && performance.now() - s.t < T.TAP_MS) sendAct('b');
+  }
+};
+surf.addEventListener('touchend', endTouch); surf.addEventListener('touchcancel', endTouch);
+let mouse = null;   // desktop testing of the touch scheme
+surf.addEventListener('mousedown', e => { if (!e.target.closest('button')) mouse = {x: e.clientX, y: e.clientY, t: performance.now(), fired: false}; });
+addEventListener('mousemove', e => { if (!mouse || mouse.fired) return; const dx = e.clientX - mouse.x, dy = e.clientY - mouse.y;
+  if (Math.hypot(dx, dy) > T.SWIPE_PX) { mouse.fired = true; sendAct(dirOf(dx, dy)); } });
+addEventListener('mouseup', () => { if (mouse && !mouse.fired && performance.now() - mouse.t < T.TAP_MS) sendAct('b'); mouse = null; });
+addEventListener('keydown', e => {
+  if (screen !== 'game') return;
+  const k = {arrowup: 'u', w: 'u', arrowdown: 'd', s: 'd', arrowleft: 'l', a: 'l', arrowright: 'r', d: 'r', ' ': 'b'}[e.key.toLowerCase()];
+  if (!k || e.repeat) return; e.preventDefault(); sendAct(k);
+});
+
+// ---- Buttons ------------------------------------------------------------------
+$('name').value = store.get('bl-name') || '';
+$('name').addEventListener('input', () => { store.set('bl-name', $('name').value); if (NET.role === 'client' && NET.game) NET.game.presence({nm: myName()}).catch(() => {}); });
+$('code').addEventListener('input', () => { $('code').value = $('code').value.toUpperCase().replace(/[^A-Z]/g, ''); });
+$('code').addEventListener('keydown', e => { if (e.key === 'Enter') joinGame($('code').value); });
+$('hostBtn').onclick = () => { audio(); hostGame(); };
+$('practiceBtn').onclick = () => { audio(); practice(); };
+$('joinBtn').onclick = () => { audio(); joinGame($('code').value); };
+$('addBot').onclick = () => { const i = S.seats.findIndex(s => !s); if (i >= 0) S.seats[i] = botSeat(S.seats, i); };
+$('dropBot').onclick = () => { for (let i = 3; i >= 0; i--) if (S.seats[i] && S.seats[i].kind === 'b') { S.seats[i] = null; break; } };
+$('startBtn').onclick = () => { audio(); wakeLock(); newMatch(); };
+$('rematchBtn').onclick = () => { newMatch(); };
+$('toLobbyBtn').onclick = () => { toLobby(); };
+for (const id of ['leaveLobby', 'leaveOver', 'leaveGame']) $(id).onclick = () => leave();
+
+// ---- Rendering: draw at 176x208, light it, then upscale by whole device pixels ----
+const cv = $('cv'), ctx = cv.getContext('2d');
+const buf = cnv(BW, BH), b = buf.getContext('2d');
+const glowC = cnv(BW, BH), gl = glowC.getContext('2d');   // colored lights only
+const lightC = cnv(BW, BH), lc = lightC.getContext('2d'); // ambient + lights, multiplied over the scene
+let SCALE = 2;
+function layout(){
+  const st = $('stage'), dpr = Math.min(3, devicePixelRatio || 1);
+  SCALE = Math.max(1, Math.floor(Math.min(st.clientWidth * dpr / BW, st.clientHeight * dpr / BH)));
+  cv.width = BW * SCALE; cv.height = BH * SCALE;
+  cv.style.width = cv.width / dpr + 'px'; cv.style.height = cv.height / dpr + 'px';
+}
+addEventListener('resize', () => { if (screen === 'game') layout(); });
+
+const rgbCache = new Map();
+function rgba(hex, a){
+  let c = rgbCache.get(hex);
+  if (!c) { const n = parseInt(hex.slice(1), 16); c = [(n >> 16) & 255, (n >> 8) & 255, n & 255]; rgbCache.set(hex, c); }
+  return `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+}
+function light(x, y, r, hex, a){
+  const gr = gl.createRadialGradient(x, y, 0, x, y, r);
+  gr.addColorStop(0, rgba(hex, a)); gr.addColorStop(1, rgba(hex, 0));
+  gl.fillStyle = gr; gl.fillRect(x - r, y - r, r * 2, r * 2);
+}
+
+const disp = [null, null, null, null];   // smoothed positions for remote snapshots
+const anim = [0, 1, 2, 3].map(() => ({walk: 0, flip: false, px: 0, py: 0, alive: false}));
+let decals = [], decalRound = -1;
+let shake = 0, lastBoom = -1;
+
+function drawGame(s, dt, now){
+  const str = typeof s.g === 'string' ? s.g : '', mood = ((+s.rd || 1) - 1) % MOODS.length, M = MOODS[mood], art = moodArt[mood];
+  const seats = Array.isArray(s.seat) ? s.seat : [], remote = NET.role === 'client';
+  if (typeof s.bx === 'number' && s.bx !== lastBoom) { if (lastBoom >= 0 && s.bx > lastBoom) { shake = reduce ? 0 : .2; boom(); } lastBoom = s.bx; }
+  if (s.rd !== decalRound || s.ph === 'count') { decals = []; decalRound = s.rd; }
+
+  // ground
+  b.globalCompositeOperation = 'source-over';
+  b.drawImage(art.floor, 0, 0);
+  b.globalAlpha = reduce ? .12 : .08 + .07 * Math.sin(now / 900); b.drawImage(art.grout, 0, 0); b.globalAlpha = 1;
+  for (const d of decals) b.drawImage(d.img, d.x, d.y);
+  // world, row by row so lower things overlap higher ones
+  const fire = new Map(), f = Array.isArray(s.f) ? s.f : [];
+  for (let k = 0; k + 1 < f.length; k += 2) fire.set(f[k], f[k + 1] / 100);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const c = str[y * W + x];
+    if (c === '1') b.drawImage(art.wall, x * TS, y * TS);
+    else if (c === '2') b.drawImage(CRATE, x * TS, y * TS);
+  }
+  const u = Array.isArray(s.u) ? s.u : [];
+  for (let k = 0; k + 1 < u.length; k += 2) {
+    const i = u[k], t = u[k + 1] | 0, img = UPS[t] || UPS[0], bob = reduce ? 0 : Math.round(Math.sin(now / 220 + i));
+    const X = (i % W) * TS, Y = ((i / W) | 0) * TS;   // pickup plate, so a bomb power-up never reads as a live bomb
+    b.fillStyle = UP_GLOW[t] || '#fff'; b.fillRect(X + 1, Y + 2, 14, 13);
+    b.fillStyle = OUT; b.fillRect(X + 2, Y + 3, 12, 11);
+    b.drawImage(img, X + 2, Y + 2 + bob);
+  }
+  for (const bm of Array.isArray(s.b) ? s.b : []) {
+    const t = bm[2] / 100, hot = t < .8 && ((now / 90) | 0) & 1, sq = reduce ? 0 : ((now / 140) | 0) & 1;
+    const X = bm[0] * TS + 2, Y = bm[1] * TS + 3;
+    b.drawImage(BOMB[hot ? 1 : 0], X, Y + sq, 12, 12 - sq);
+    b.fillStyle = '#ff9a3c'; b.fillRect(X + 8, Y, 1, 2);
+    b.fillStyle = ((now / 60) | 0) & 1 ? '#fff6d5' : '#ffd23f'; b.fillRect(X + 9, Y - 1 + (((now / 100) | 0) & 1), 1, 1);
+  }
+  for (const [i, ttl] of fire) {
+    const x = i % W, y = (i / W) | 0;
+    const h = fire.has(i - 1) || fire.has(i + 1), v = fire.has(i - W) || fire.has(i + W);
+    const kind = h && !v ? 1 : v && !h ? 2 : 0;
+    b.globalAlpha = Math.min(1, ttl / .15);
+    b.drawImage(FIRE[kind][(((now / 70) | 0) + i) & 3], x * TS, y * TS);
+  }
+  b.globalAlpha = 1;
+  // players, sorted by y
+  const me = mySlot(), ps = Array.isArray(s.p) ? s.p : [], order = [];
+  for (let i = 0; i < 4; i++) {
+    const p = ps[i], A = anim[i];
+    if (!Array.isArray(p)) { disp[i] = null; A.alive = false; continue; }
+    let x = p[0] / 100, y = p[1] / 100;
+    if (remote) {
+      const d = disp[i];
+      if (!d || Math.abs(d.x - x) + Math.abs(d.y - y) > 2) disp[i] = {x, y};
+      else { const k = 1 - Math.exp(-dt * 22); d.x += (x - d.x) * k; d.y += (y - d.y) * k; }
+      x = disp[i].x; y = disp[i].y;
+    }
+    if (A.alive && !p[2] && (s.ph === 'play' || s.ph === 'round')) {
+      decals.push({img: splat(COLORS[i]), x: Math.round(A.px * TS) - 2, y: Math.round(A.py * TS) - 2});
+      spawnBurst(i, A.px, A.py, chOf(seats[i] && seats[i][4]), now);
+      if (i === me) startPsy(now, A.px, A.py);
+    }
+    if (i === me && p[2]) endPsy();
+    A.alive = !!p[2];
+    if (!p[2]) continue;
+    const moving = Math.abs(x - A.px) + Math.abs(y - A.py) > .002;
+    A.walk = moving ? A.walk + dt : 0; A.px = x; A.py = y;
+    if (p[5] === 'l') A.flip = true; else if (p[5] === 'r') A.flip = false;
+    order.push({i, x, y, ch: chOf(seats[i] && seats[i][4])});
+  }
+  order.sort((a, c) => a.y - c.y);
+  for (const o of order) {
+    const A = anim[o.i], leg = A.walk > 0 ? ((A.walk * 9) | 0) & 1 : 0;
+    const X = Math.round(o.x * TS), Y = Math.round(o.y * TS);
+    b.fillStyle = rgba(COLORS[o.i], .55); b.fillRect(X + 3, Y + 13, 10, 2); b.fillRect(X + 4, Y + 12, 8, 4);  // seat-color ring
+    const spr = charSprite(o.ch, o.i, leg, ((now / 90) | 0) % 3);
+    b.save();
+    if (A.flip) { b.translate(X + TS, 0); b.scale(-1, 1); b.drawImage(spr, 1, Y - 3 - leg); }
+    else b.drawImage(spr, X + 1, Y - 3 - leg);
+    b.restore();
+  }
+
+  // lighting: colored lights over a dim ambient, multiplied; then a soft additive glow
+  gl.globalCompositeOperation = 'source-over'; gl.clearRect(0, 0, BW, BH); gl.globalCompositeOperation = 'lighter';
+  light(0, 0, 150, M.neon, .45); light(BW, BH, 150, M.neon2, .45);
+  for (const o of order) light(o.x * TS + 8, o.y * TS + 7, 34, COLORS[o.i], .55);
+  for (const bm of Array.isArray(s.b) ? s.b : []) light(bm[0] * TS + 8, bm[1] * TS + 8, 18 + (((now / 90) | 0) & 1) * 4, '#ff2a5a', .6);
+  for (const [i, ttl] of fire) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 26, '#ff9a3c', Math.min(.8, ttl * 1.6));
+  for (let k = 0; k + 1 < u.length; k += 2) light((u[k] % W) * TS + 8, ((u[k] / W) | 0) * TS + 8, 14, UP_GLOW[u[k + 1]] || '#fff', .5);
+  lc.globalCompositeOperation = 'source-over'; lc.fillStyle = T.AMBIENT; lc.fillRect(0, 0, BW, BH);
+  lc.globalCompositeOperation = 'lighter'; lc.drawImage(glowC, 0, 0);
+  b.globalCompositeOperation = 'multiply'; b.drawImage(lightC, 0, 0);
+  b.globalCompositeOperation = 'lighter'; b.globalAlpha = .35; b.drawImage(glowC, 0, 0); b.globalAlpha = 1;
+  b.globalCompositeOperation = 'source-over'; b.drawImage(VIGNETTE, 0, 0);
+
+  // markers stay unlit so you can always find yourself
+  for (const o of order) {
+    if (o.i !== me) continue;
+    const X = Math.round(o.x * TS) + 8, Y = Math.round(o.y * TS) - 8 + (reduce ? 0 : Math.round(Math.sin(now / 180)));
+    b.fillStyle = OUT; b.fillRect(X - 4, Y - 4, 9, 2); b.fillRect(X - 3, Y - 2, 7, 2); b.fillRect(X - 2, Y, 5, 1); b.fillRect(X - 1, Y + 1, 3, 1);
+    b.fillStyle = '#ffffff'; b.fillRect(X - 3, Y - 3, 7, 1); b.fillRect(X - 2, Y - 2, 5, 1); b.fillRect(X - 1, Y - 1, 3, 1); b.fillRect(X, Y, 1, 1);
+    const age = now - lastSwipe.t;
+    if (lastSwipe.d && age < 220) {
+      const [dx, dy] = DIR[lastSwipe.d], ax = Math.round(o.x * TS) + 8 + dx * 12, ay = Math.round(o.y * TS) + 7 + dy * 12;
+      b.globalAlpha = 1 - age / 220; b.fillStyle = '#ffffff';
+      for (let k = 0; k < 3; k++) {     // little pixel chevron pointing the swipe direction
+        const w = 2 * k + 1;
+        if (dx) b.fillRect(ax + dx * (1 - k), ay - k, 1, w); else b.fillRect(ax - k, ay + dy * (1 - k), w, 1);
+      }
+      b.globalAlpha = 1;
+    }
+  }
+
+  // upscale; shake moves by whole art pixels
+  let ox = 0, oy = 0;
+  if (shake > 0) { shake -= dt; ox = Math.round((Math.random() - .5) * 3) * SCALE; oy = Math.round((Math.random() - .5) * 3) * SCALE; }
+  blit(ox, oy, dt, now);
+}
+
+// ---- Death FX: everyone sees the fighter burst into isometric ASCII; whoever died
+// also sees a warped, channel-split, half-ASCII view until the next round ----------
+const GLYPHS = '#@%&*+=$01/\\<>?!';
+const RAMP = ' .:-=+*#%@';
+let bursts = [];
+const psy = {on: false, t0: 0, x: 0, y: 0, hue: 0, sample: null, sampleT: 0};
+const hash = (a, c, e) => { let h = (Math.imul(a, 374761393) + Math.imul(c, 668265263) + Math.imul(e, 1274126177)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+const chR = cnv(BW, BH), rcx = chR.getContext('2d'), chC = cnv(BW, BH), ccx = chC.getContext('2d');
+
+function spawnBurst(slot, x, y, ch, now){
+  const spr = charSprite(ch, slot, 0, 0), d = spr.getContext('2d').getImageData(0, 0, spr.width, spr.height).data, parts = [];
+  for (let py = 0; py < spr.height; py += 2) for (let px = 0; px < spr.width; px += 2) {
+    const o = (py * spr.width + px) * 4;
+    if (d[o + 3] < 128 || d[o] + d[o + 1] + d[o + 2] < 90) continue;     // skip the dark outline
+    const a = Math.atan2(py - 9, px - 7) + (Math.random() - .5) * 1.2, sp = 25 + Math.random() * 65;
+    parts.push({gx: px - 7, gy: (Math.random() - .5) * 3, z: 16 - py, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * .5,   // y squashed 2:1 = iso ground plane
+      vz: 50 + Math.random() * 100, col: `rgb(${d[o]},${d[o + 1]},${d[o + 2]})`, g: GLYPHS[(Math.random() * GLYPHS.length) | 0]});
+  }
+  bursts.push({cx: x * TS + 8, cy: y * TS + 13, t0: now, parts, col: COLORS[slot]});
+}
+function drawBursts(dt, now, ox, oy){
+  const S = SCALE;
+  bursts = bursts.filter(bu => now - bu.t0 < 2300);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const bu of bursts) {
+    const t = (now - bu.t0) / 1000;
+    ctx.font = `${Math.round(6 * S)}px VT323, monospace`;
+    for (const [delay, col] of [[0, '#ffffff'], [.14, bu.col]]) {          // iso shockwave diamonds drawn in slashes
+      const tt = t - delay; if (tt < 0 || tt > .7) continue;
+      const r = 6 + tt * 75, n = Math.max(3, Math.round(r / 4));
+      ctx.globalAlpha = 1 - tt / .7; ctx.fillStyle = col;
+      for (const [x0, y0, x1, y1, g] of [[0, -r / 2, r, 0, '\\'], [r, 0, 0, r / 2, '/'], [0, r / 2, -r, 0, '\\'], [-r, 0, 0, -r / 2, '/']])
+        for (let k = 0; k < n; k++) ctx.fillText(g, (bu.cx + x0 + (x1 - x0) * k / n) * S + ox, (bu.cy + y0 + (y1 - y0) * k / n) * S + oy);
+    }
+    ctx.font = `bold ${Math.round(7 * S)}px VT323, monospace`;
+    const fade = Math.max(0, Math.min(1, (2.3 - t) / .7));
+    for (const p of bu.parts) {
+      p.vz -= 260 * dt; p.z += p.vz * dt; p.gx += p.vx * dt; p.gy += p.vy * dt;
+      if (p.z < 0) { p.z = 0; p.vz *= -.4; p.vx *= .6; p.vy *= .6; }
+      if (Math.random() < dt * 8) p.g = GLYPHS[(Math.random() * GLYPHS.length) | 0];
+      const X = (bu.cx + p.gx) * S + ox, Y = (bu.cy + p.gy) * S + oy;
+      ctx.globalAlpha = fade * .6; ctx.fillStyle = '#000'; ctx.fillText('.', X, Y);            // ground shadow sells the height
+      ctx.globalAlpha = fade; ctx.fillStyle = p.col; ctx.fillText(p.g, X, Y - p.z * S);
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function startPsy(now, x, y){ Object.assign(psy, {on: true, t0: now, x, y, sample: null}); flatline(); }
+function endPsy(){ if (!psy.on) return; psy.on = false; cv.style.filter = ''; }
+function psyK(now){   // 0..1: slams in, holds, settles to a lingering haze while you spectate
+  if (!psy.on) return 0;
+  const t = (now - psy.t0) / 1000, k = t < .25 ? t / .25 : t < 1.6 ? 1 : Math.max(.35, 1 - (t - 1.6) * .5);
+  return reduce ? k * .3 : k;
+}
+function blit(ox, oy, dt, now){
+  const S = SCALE, k = psyK(now);
+  ctx.imageSmoothingEnabled = false; ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (k <= 0) { ctx.drawImage(buf, ox, oy, BW * S, BH * S); drawBursts(dt, now, ox, oy); return; }
+  for (const [g, col] of [[rcx, '#ff0000'], [ccx, '#00ffff']]) {      // split red from cyan
+    g.globalCompositeOperation = 'copy'; g.drawImage(buf, 0, 0);
+    g.globalCompositeOperation = 'multiply'; g.fillStyle = col; g.fillRect(0, 0, BW, BH);
+  }
+  const d = Math.max(1, Math.round(k * 2.5)), tick = (now / 70) | 0;
+  ctx.globalCompositeOperation = 'lighter';
+  for (let y = 0; y < BH; y += 2) {                                    // wavy scanline warp + torn glitch bands
+    let off = k * (5 * Math.sin(y * .09 + now / 180) + 2 * Math.sin(y * .31 - now / 95));
+    if (!reduce && hash(y >> 3, tick, 7) < k * .12) off += (hash(y >> 3, tick, 9) - .5) * 50 * k;
+    off = Math.round(off);
+    ctx.drawImage(chR, 0, y, BW, 2, (off + d) * S + ox, y * S + oy, BW * S, 2 * S);
+    ctx.drawImage(chC, 0, y, BW, 2, (off - d) * S + ox, y * S + oy, BW * S, 2 * S);
+  }
+  ctx.globalCompositeOperation = 'source-over';
+  drawBursts(dt, now, ox, oy);
+  asciiDissolve(k, now, ox, oy);
+  psy.hue = (psy.hue + dt * k * 120) % 360;
+  cv.style.filter = `hue-rotate(${psy.hue | 0}deg) saturate(${(1 + k * .9).toFixed(2)}) contrast(${(1 + k * .25).toFixed(2)})`;
+}
+// The world turns to text, spreading out from where you died.
+function asciiDissolve(k, now, ox, oy){
+  const C = 8, S = SCALE, cols = Math.ceil(BW / C), rows = Math.ceil(BH / C), t = (now - psy.t0) / 1000;
+  if (!psy.sample || now - psy.sampleT > 90) { psy.sample = b.getImageData(0, 0, BW, BH).data; psy.sampleT = now; }
+  const d = psy.sample, tick = (now / 150) | 0, reach = 20 + t * 110, fx = psy.x * TS + 8, fy = psy.y * TS + 8;
+  ctx.font = `bold ${Math.round(C * S * 1.05)}px VT323, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let cy = 0; cy < rows; cy++) for (let cx = 0; cx < cols; cx++) {
+    const px = Math.min(BW - 1, cx * C + C / 2), py = Math.min(BH - 1, cy * C + C / 2);
+    const near = Math.max(0, 1 - Math.hypot(px - fx, py - fy) / reach);
+    if (hash(cx, cy, tick) >= k * (.12 + .5 * near)) continue;
+    const o = (py * BW + px) * 4, r = d[o], g = d[o + 1], bl = d[o + 2], lum = (r * .3 + g * .59 + bl * .11) / 255;
+    ctx.fillStyle = 'rgba(0,0,0,.85)'; ctx.fillRect(cx * C * S + ox, cy * C * S + oy, C * S, C * S);
+    ctx.fillStyle = `rgb(${Math.min(255, r * 1.6 + 40) | 0},${Math.min(255, g * 1.6 + 40) | 0},${Math.min(255, bl * 1.6 + 40) | 0})`;
+    ctx.fillText(RAMP[Math.min(RAMP.length - 1, 1 + ((lum * 3.5 * (RAMP.length - 1)) | 0))], (cx * C + C / 2) * S + ox, (cy * C + C / 2) * S + oy);
+  }
+}
+
+let hudKey = '';
+function renderHud(s){
+  const seats = Array.isArray(s.seat) ? s.seat : [], ps = Array.isArray(s.p) ? s.p : [], w = Array.isArray(s.w) ? s.w : [];
+  const tm = Math.max(0, (+s.tm || 0) / 10), sd = s.ph === 'play' && tm <= 0;
+  const clock = sd ? 'SUDDEN' : `${Math.floor(tm / 60)}:${String(Math.floor(tm % 60)).padStart(2, '0')}`;
+  const key = JSON.stringify([seats, ps.map(p => p && p[2]), w, clock, s.rd, mySlot()]);
+  if (key === hudKey) return; hudKey = key;
+  const hud = $('hud'); hud.textContent = '';
+  const chip = i => {
+    const st = seats[i], el = document.createElement('div');
+    el.className = 'chip' + (!st ? ' empty' : (!ps[i] || !ps[i][2]) ? ' dead' : '');
+    el.style.setProperty('--c', COLORS[i]);
+    if (!st) return el;
+    const txt = document.createElement('div');
+    const sp = document.createElement('span'); sp.textContent = i === mySlot() ? 'You' : cleanName(st[0]) || CNAMES[i];
+    const pips = document.createElement('div'); pips.className = 'pips';
+    for (let k = 0; k < T.WINS; k++) { const p = document.createElement('u'); if (k < (+w[i] || 0)) p.style.background = COLORS[i]; pips.append(p); }
+    txt.append(sp, pips);
+    el.append(portrait(chOf(st[4]), i), txt); return el;
+  };
+  const c = document.createElement('div'); c.className = 'clock' + (sd ? ' sd' : '');
+  c.textContent = clock; const sm = document.createElement('small'); sm.textContent = 'ROUND ' + (+s.rd || 1); c.append(sm);
+  hud.append(chip(0), chip(1), c, chip(2), chip(3));
+}
+let bannerKey = '', lastCount = 0;
+function renderBanner(s){
+  const seats = Array.isArray(s.seat) ? s.seat : [];
+  const nameOf = i => i === mySlot() ? 'You' : (seats[i] && cleanName(seats[i][0])) || CNAMES[i];
+  let text = '', sub = '', color = '#e9e4f5';
+  if (s.ph === 'count') {
+    const n = Math.ceil((+s.cd || 0) / 10); text = String(Math.max(1, n)); sub = 'Round ' + s.rd;
+    if (n !== lastCount) { lastCount = n; blip(440); }
+  } else if (s.ph === 'play' && T.ROUND_TIME - (+s.tm || 0) / 10 < .7) { text = 'GO'; color = '#2de2e6'; if (lastCount) { lastCount = 0; blip(880); } }
+  else if (s.ph === 'round') {
+    if (s.last >= 0) { text = s.last === mySlot() ? 'Round is yours' : nameOf(s.last) + ' takes it'; color = COLORS[s.last]; }
+    else text = 'Draw';
+  }
+  const key = text + sub + color; if (key === bannerKey) return; bannerKey = key;
+  const bn = $('banner'); bn.textContent = ''; bn.style.color = color;
+  if (sub) { const sm = document.createElement('small'); sm.textContent = sub; bn.append(sm); }
+  bn.append(text);
+  $('over').hidden = s.ph !== 'match';
+  if (s.ph === 'match') {
+    const c = +s.champ;
+    $('overTitle').textContent = c === mySlot() ? 'You win the match' : nameOf(c) + ' wins the match';
+    $('overTitle').style.color = COLORS[c] || '#e9e4f5';
+    $('overSub').textContent = (Array.isArray(s.w) ? s.w : []).map((n, i) => seats[i] ? nameOf(i) + ' ' + n : '').filter(Boolean).join(' · ');
+    $('overHost').hidden = !(NET.role === 'host' || NET.role === 'solo');
+  }
+}
+function present(s, dt, now){
+  if (s.ph === 'lobby') { endPsy(); show('lobby'); renderLobby(s); return; }
+  lobbyKey = '';
+  show('game'); drawGame(s, dt, now); renderHud(s); renderBanner(s);
+}
+
+// ---- Sound (starts after the first tap, as iOS requires) -----------------------
+let AC = null;
+function audio(){
+  if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch { AC = null; } }
+  if (AC && AC.state === 'suspended') AC.resume().catch(() => {});
+}
+function boom(){
+  if (!AC || AC.state !== 'running') return;
+  const len = .4, bf = AC.createBuffer(1, AC.sampleRate * len, AC.sampleRate), d = bf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2.4);
+  const src = AC.createBufferSource(), lp = AC.createBiquadFilter(), gain = AC.createGain();
+  src.buffer = bf; lp.type = 'lowpass'; lp.frequency.value = 900; gain.gain.value = .5;
+  src.connect(lp).connect(gain).connect(AC.destination); src.start();
+}
+function blip(f){
+  if (!AC || AC.state !== 'running') return;
+  const o = AC.createOscillator(), gain = AC.createGain();
+  o.type = 'square'; o.frequency.value = f; gain.gain.setValueAtTime(.08, AC.currentTime); gain.gain.exponentialRampToValueAtTime(.001, AC.currentTime + .15);
+  o.connect(gain).connect(AC.destination); o.start(); o.stop(AC.currentTime + .16);
+}
+function flatline(){
+  if (!AC || AC.state !== 'running') return;
+  const o = AC.createOscillator(), gain = AC.createGain(), t = AC.currentTime;
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(880, t); o.frequency.exponentialRampToValueAtTime(40, t + .9);
+  gain.gain.setValueAtTime(.12, t); gain.gain.exponentialRampToValueAtTime(.001, t + 1);
+  o.connect(gain).connect(AC.destination); o.start(); o.stop(t + 1);
+}
+function wakeLock(){ try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch {} }
+
+// ---- Main loop ------------------------------------------------------------------
+const STEP = 1 / 60;
+let last = 0, acc = 0;
+function frame(now){
+  const dt = Math.min(.1, (now - (last || now)) / 1000); last = now;
+  try {
+    if (NET.role === 'host' || NET.role === 'solo') {
+      if (NET.game) hostSync();
+      acc += dt; while (acc >= STEP) { update(STEP); acc -= STEP; }
+      snap = encode();
+      if (NET.game) hostSend(dt);
+    } else if (NET.role === 'client' && NET.game) clientSync(now);
+    if (NET.role && snap) present(snap, dt, now);
+    else if (NET.role === 'client') show('home');
+  } catch (err) { console.error(err); }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
