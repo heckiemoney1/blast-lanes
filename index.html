@@ -822,68 +822,62 @@ $('hostBtn').disabled = $('joinBtn').disabled = $('code').disabled = true;   // 
 // Hosted outside claude.ai, phones talk through a free public MQTT relay over an ordinary secure WebSocket,
 // which gets through any Wi-Fi or cellular network (direct phone-to-phone links often can't). Same shape as
 // the room capability (join -> presence/peers/leave), so the game code doesn't care which one it runs on.
-// Each phone keeps its presence as a retained message at blastlanes/1/<room>/p/<id>; its "last will" clears
-// that message if the phone drops, so departed players vanish on their own.
+// Each phone keeps its presence as a retained message: the host's game state at blastlanes/2/<room>/h/<id>, a
+// player's inputs at .../p/<id>. The host only listens to players and players only listen to the host, so nobody
+// downloads their own traffic back and a player's moves never wait in line behind the host's state stream.
+// A phone's "last will" clears its message if it drops, so departed players vanish on their own.
 const RELAYS = window.BL_RELAYS || ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
-const RELAY_V5 = !window.BL_RELAY_V4;   // MQTT 5 lets us skip our own echoes ("no local"); tests use a v3 broker
 function relayNet(){
   const wait = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
   // Connect and subscribe in one go, so a relay that accepts the connection but never answers the subscribe
-  // counts as a failure instead of leaving the Host button stuck.
-  async function connect(url, id, will, v5, topic){
+  // counts as a failure instead of leaving the Host button stuck. A small browser buffer means a send only
+  // counts as done once it's really on its way, so the host's "one state message in flight" rule holds on a
+  // slow phone link instead of piling up seconds of stale state.
+  async function connect(url, id, will, topics){
     const c = mqtt.connect(url, {clientId: id, clean: true, keepalive: 15, connectTimeout: 5000, reconnectPeriod: 1500,
-      protocolVersion: v5 ? 5 : 4, will});
+      protocolVersion: 4, will, browserBufferSize: 2048, browserBufferTimeout: 30});
     c.on('error', () => {});
     try {
       await wait(new Promise(res => c.once('connect', res)), 6000);
-      await wait(new Promise((res, rej) => c.subscribe(topic, v5 ? {qos: 1, nl: true} : {qos: 1}, (err, granted) =>
-        err || (granted && granted[0] && granted[0].qos >= 128) ? rej(err || new Error('refused')) : res())), 4000);
+      await wait(new Promise((res, rej) => c.subscribe(topics, {qos: 1}, (err, granted) =>
+        err || (granted || []).some(g => g.qos >= 128) ? rej(err || new Error('refused')) : res())), 4000);
       return c;
     } catch (e) { c.end(true); throw e; }
   }
-  // MQTT 5 and 3.1.1 race; the first that connects and subscribes wins (v5 gets a short head start).
-  function connectAny(url, id, base, will){
-    const topic = base + '/p/+';
-    if (!RELAY_V5) return connect(url, id, will, false, topic).then(c => ({c, v5: false}));
-    return new Promise((res, rej) => {
-      let done = false, fails = 0, v4 = null;
-      const win = (c, v5) => { if (done) return c.end(); done = true; res({c, v5}); };
-      const lose = () => { if (++fails === 2 && !done) rej(new Error('unreachable')); };
-      const start4 = () => { if (!v4 && !done) v4 = connect(url, id + 'c', will, false, topic).then(c => win(c, false), lose); };
-      connect(url, id, will, true, topic).then(c => win(c, true), () => { start4(); lose(); });
-      setTimeout(start4, 1500);
-    });
-  }
-  async function openRoom(url, name){
-    const id = 'bl' + Math.random().toString(36).slice(2, 12), base = 'blastlanes/1/' + name, mine = base + '/p/' + id;
-    const will = {topic: mine, payload: '', retain: true, qos: 0};
-    const {c, v5} = await connectAny(url, id, base, will);
-    const stats = {url, v5, rx: 0, tx: 0, drop: 0};
+  async function openRoom(url, name, hosting){
+    const id = 'bl' + Math.random().toString(36).slice(2, 12), base = 'blastlanes/2/' + name;
+    const mine = base + (hosting ? '/h/' : '/p/') + id, will = {topic: mine, payload: '', retain: true, qos: 0};
+    // Everyone first looks for a host (is this code free / is anyone hosting it?); the host also hears players.
+    const c = await connect(url, id, will, hosting ? [base + '/h/+', base + '/p/+'] : [base + '/h/+']);
+    const stats = {url, rx: 0, tx: 0, drop: 0};
     const pres = new Map(); let mine$ = {}, list = Object.freeze([]);
     const rebuild = () => { list = Object.freeze([...pres].map(([pid, v]) => Object.freeze(
       {peer: pid, by: null, isMe: pid === id, sameTab: pid === id, kind: 'viewer', guest: false, presence: v, updatedAt: Date.now()}))); };
     pres.set(id, mine$); rebuild();
     c.on('message', (topic, payload) => {
-      const pid = topic.slice(base.length + 3);
-      if (!pid || pid === id || pid.includes('/') || !topic.startsWith(base + '/p/')) return;
+      const kind = topic.slice(base.length, base.length + 3), pid = topic.slice(base.length + 3);
+      if (!topic.startsWith(base) || (kind !== '/p/' && kind !== '/h/') || !pid || pid === id || pid.includes('/')) return;
       stats.rx++;
       let v = null; if (payload.length) { try { v = JSON.parse(payload.toString()); } catch {} }
       if (v && typeof v === 'object' && !Array.isArray(v)) pres.set(pid, v); else pres.delete(pid);
       rebuild();
     });
-    // One publish in flight at a time; newer state replaces anything still waiting, so a slow link never builds a
-    // backlog. The host's game state goes at QoS 0 (only the latest matters); a player's inputs go at QoS 1.
+    // One state message in flight at a time; newer state replaces anything still waiting, so a slow link never
+    // builds a backlog. The host's game state goes at QoS 0 (only the latest matters); a player's inputs go at
+    // QoS 1, right away.
     let busy = 0, again = false;
     const publish = () => {
-      if (!mine$.s) { stats.tx++; c.publish(mine, JSON.stringify(mine$), {qos: 1, retain: true}); return; }   // a player's inputs: send now
+      if (!hosting) { stats.tx++; c.publish(mine, JSON.stringify(mine$), {qos: 1, retain: true}); return; }
       if (busy && performance.now() - busy < 3000) { again = true; stats.drop++; return; }
       busy = performance.now(); again = false; stats.tx++;
       c.publish(mine, JSON.stringify(mine$), {qos: 0, retain: true}, () => { busy = 0; if (again) publish(); });
     };
     c.on('connect', () => { busy = 0; if (Object.keys(mine$).length) publish(); });   // after a reconnect, say we're still here
     await new Promise(r => setTimeout(r, 900));   // retained presences arrive right after subscribing
+    const hub = ![...pres.keys()].some(k => k !== id);   // hub: nobody else here (for a player: nobody hosting)
+    if (hosting) { c.unsubscribe(base + '/h/+'); for (const [k, v] of pres) if (k !== id && v && v.r === 'h') pres.delete(k); rebuild(); }
     return {
-      name, url, stats, hz: 15, hub: ![...pres.keys()].some(k => k !== id),   // hub: nobody else was in this room
+      name, url, stats, hz: 15, hub, buffered: () => (c.stream && c.stream.socket && c.stream.socket.bufferedAmount) || 0,
       peers: () => list,
       async presence(patch){
         mine$ = Object.assign({}, mine$);
@@ -896,8 +890,8 @@ function relayNet(){
   // All relays are tried at once. Hosting takes the first that answers; joining ({find: true}) looks for the
   // host on every relay that answers.
   async function join(name, opt){
-    const tries = RELAYS.map(url => openRoom(url, name));
-    if (!(opt && opt.find)) {
+    const find = !!(opt && opt.find), tries = RELAYS.map(url => openRoom(url, name, !find));
+    if (!find) {
       let r;
       try { r = await Promise.any(tries); } catch { throw new Error('no relay reachable'); }
       for (const t of tries) t.then(o => { if (o !== r) o.leave(); }, () => {});
@@ -1011,6 +1005,11 @@ function hostSync(){
     s.name = cleanName(p.presence.nm) || s.name;
     s.cu = CUSTOM_RE.test(p.presence.cu || '') ? p.presence.cu : '';
     s.ch = chOf(p.presence.ch); if (s.ch === CUSTOM && !s.cu) s.ch = 0;
+    const e = p.presence.e;
+    if (typeof e === 'number' && e !== s.echo) {
+      s.echo = e; const rtt = now - e;
+      if (rtt >= 0 && rtt < 60000) s.ping = s.ping ? s.ping * .6 + rtt * .4 : rtt;
+    }
     const a = p.presence.a; if (!Array.isArray(a)) return;
     for (const e of a) {
       if (!Array.isArray(e) || typeof e[0] !== 'number' || e[0] <= S.acks[i]) continue;
@@ -1024,12 +1023,23 @@ function hostSync(){
     NET.room.presence({host: NET.code, hn: myName(), n: S.seats.filter(Boolean).length, ph: S.ph === 'lobby' ? 'lobby' : 'play'}).catch(() => {});
   }
 }
+// Players echo the send time of the latest state they got, so the host knows each one's round trip. When the
+// slowest one falls behind, the host sends less often until the backlog clears, rather than letting it grow.
+function netHz(){
+  const base = NET.game.hz || T.NET_HZ;
+  const ping = Math.max(0, ...S.seats.map(x => x && x.kind === 'p' && !x.gone && x.ping || 0));
+  return ping > 450 ? Math.max(4, base * 450 / ping) : base;
+}
 function hostSend(dt){
   NET.netT -= dt; if (NET.netT > 0) return;
   const js = JSON.stringify(snap);
   if (js === NET.sentJson) return;
-  NET.netT = 1 / (NET.game.hz || T.NET_HZ); NET.sentJson = js; NET.snapBytes = js.length;
-  NET.game.presence({r: 'h', s: snap}).catch(() => {});
+  NET.netT = 1 / netHz(); NET.sentJson = js;
+  // The arena only changes when crates break or the ring closes: send it then, and every second for anyone who just joined.
+  const out = Object.assign({}, snap, {t: Math.round(performance.now())});
+  if (out.g && out.g === NET.sentG && ++NET.gSkip < 15) delete out.g; else { NET.sentG = out.g; NET.gSkip = 0; }
+  NET.snapBytes = js.length;
+  NET.game.presence({r: 'h', s: out}).catch(() => {});
 }
 function clientSync(now){
   const peers = NET.game.peers();
@@ -1038,9 +1048,18 @@ function clientSync(now){
   if (host) {
     NET.seenHost = now;
     if (host.presence !== NET.lastHostPres) {
-      NET.lastHostPres = host.presence; snap = host.presence.s;
-      const slot = mySlot(), ack = slot >= 0 && Array.isArray(snap.k) ? +snap.k[slot] || 0 : 0;
-      NET.pend = NET.pend.filter(e => e[0] > ack);
+      NET.lastHostPres = host.presence;
+      let s = host.presence.s;
+      if (s.ph !== 'lobby' && typeof s.g !== 'string') {   // arena unchanged since the last state: keep ours
+        const same = snap && typeof snap.g === 'string' && Array.isArray(s.dm) && Array.isArray(snap.dm) && s.dm[0] === snap.dm[0] && s.dm[1] === snap.dm[1];
+        s = same ? Object.assign({}, s, {g: snap.g}) : null;
+      }
+      if (s) {
+        snap = s;
+        const slot = mySlot(), ack = slot >= 0 && Array.isArray(snap.k) ? +snap.k[slot] || 0 : 0;
+        NET.pend = NET.pend.filter(e => e[0] > ack);
+        if (typeof s.t === 'number' && now - (NET.echoAt || 0) > 300) { NET.echoAt = now; NET.game.presence({e: s.t}).catch(() => {}); }
+      }
     }
     if (NET.pend.length && now - (NET.resentAt || 0) > 1000) {   // moves the host hasn't confirmed yet: send again
       NET.resentAt = now; NET.game.presence({a: NET.pend}).catch(() => {});
@@ -2452,15 +2471,15 @@ const DEBUG = location.hash === '#debug';
 if (DEBUG) setInterval(() => {
   const now = performance.now(), g = NET.game, st = g && g.stats, lines = [];
   lines.push('role ' + (NET.role || '-') + '  code ' + (NET.code || '-') + '  phase ' + (snap ? snap.ph : '-'));
-  lines.push('link ' + (st ? st.url.replace(/^wss?:\/\//, '') + (st.v5 ? ' v5' : ' v4') + '  rx ' + st.rx + '  tx ' + st.tx + '  merged ' + st.drop : g ? 'claude room' : 'none'));
+  lines.push('link ' + (st ? st.url.replace(/^wss?:\/\//, '') + '  rx ' + st.rx + '  tx ' + st.tx + '  merged ' + st.drop : g ? 'claude room' : 'none'));
   lines.push('me ' + (NET.myPeer || '-') + '  slot ' + mySlot());
   if (NET.role === 'client') {
     const sl = mySlot(), ack = snap && Array.isArray(snap.k) && sl >= 0 ? snap.k[sl] : '-';
     lines.push('sent ' + NET.seq + '  acked ' + ack + '  waiting ' + NET.pend.length + '  host seen ' + (NET.seenHost ? Math.round(now - NET.seenHost) + 'ms ago' : 'never'));
   }
   if (S && NET.role === 'host') {
-    lines.push('state ' + (NET.snapBytes || 0) + 'B');
-    S.seats.forEach((x, i) => { if (x) lines.push(i + ' ' + x.kind + ' ' + (x.peer || '') + (x.kind === 'p' ? '  ack ' + S.acks[i] + '  last input ' + (x.inputAt ? Math.round(now - x.inputAt) + 'ms' : 'never') + (x.lost ? '  MISSING ' + Math.round(now - x.lost) + 'ms' : '') + (x.gone ? '  GONE' : '') : '')); });
+    lines.push('state ' + (NET.snapBytes || 0) + 'B  ' + netHz().toFixed(1) + '/s' + (g.buffered ? '  buffered ' + g.buffered() + 'B' : ''));
+    S.seats.forEach((x, i) => { if (x) lines.push(i + ' ' + x.kind + ' ' + (x.peer || '') + (x.kind === 'p' ? '  ack ' + S.acks[i] + '  last input ' + (x.inputAt ? Math.round(now - x.inputAt) + 'ms' : 'never') + (x.ping ? '  ping ' + Math.round(x.ping) + 'ms' : '') + (x.lost ? '  MISSING ' + Math.round(now - x.lost) + 'ms' : '') + (x.gone ? '  GONE' : '') : '')); });
   }
   $('dbg').hidden = false; $('dbg').textContent = lines.join('\n');
 }, 250);
