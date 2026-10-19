@@ -335,6 +335,7 @@
 </section>
 
 <div class="toast" id="toast" hidden></div>
+<pre id="dbg" hidden style="position:fixed;left:4px;top:max(4px,env(safe-area-inset-top,0px));z-index:20;margin:0;padding:6px 8px;background:rgba(0,0,0,.8);color:#7dff6a;font:12px/1.3 ui-monospace,monospace;pointer-events:none;max-width:calc(100% - 8px);white-space:pre-wrap"></pre>
 
 <script>
 "use strict";
@@ -796,16 +797,23 @@ $('hostBtn').disabled = $('joinBtn').disabled = $('code').disabled = true;   // 
 // Each phone keeps its presence as a retained message at blastlanes/1/<room>/p/<id>; its "last will" clears
 // that message if the phone drops, so departed players vanish on their own.
 const RELAYS = window.BL_RELAYS || ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+const RELAY_V5 = !window.BL_RELAY_V4;   // MQTT 5 lets us skip our own echoes ("no local"); tests use a v3 broker
 function relayNet(){
+  function connect(url, id, will, v5){
+    const c = mqtt.connect(url, {clientId: id, clean: true, keepalive: 15, connectTimeout: 6000, reconnectPeriod: 1500,
+      protocolVersion: v5 ? 5 : 4, will});
+    c.on('error', () => {});
+    return new Promise((res, rej) => {
+      const t = setTimeout(() => { c.end(true); rej(new Error('timeout')); }, 6500);
+      c.once('connect', () => { clearTimeout(t); res(c); });
+    });
+  }
   async function openRoom(url, name){
     const id = 'bl' + Math.random().toString(36).slice(2, 12), base = 'blastlanes/1/' + name, mine = base + '/p/' + id;
-    const c = mqtt.connect(url, {clientId: id, clean: true, keepalive: 15, connectTimeout: 6000, reconnectPeriod: 1500,
-      will: {topic: mine, payload: '', retain: true, qos: 0}});
-    c.on('error', () => {});
-    await new Promise((res, rej) => {
-      const t = setTimeout(() => { c.end(true); rej(new Error('timeout')); }, 6500);
-      c.once('connect', () => { clearTimeout(t); res(); });
-    });
+    const will = {topic: mine, payload: '', retain: true, qos: 0};
+    let c, v5 = RELAY_V5;
+    try { c = await connect(url, id, will, v5); } catch (e) { if (!v5) throw e; v5 = false; c = await connect(url, id, will, false); }
+    const stats = {url, v5, rx: 0, tx: 0, drop: 0};
     const pres = new Map(); let mine$ = {}, list = Object.freeze([]);
     const rebuild = () => { list = Object.freeze([...pres].map(([pid, v]) => Object.freeze(
       {peer: pid, by: null, isMe: pid === id, sameTab: pid === id, kind: 'viewer', guest: false, presence: v, updatedAt: Date.now()}))); };
@@ -813,16 +821,24 @@ function relayNet(){
     c.on('message', (topic, payload) => {
       const pid = topic.slice(base.length + 3);
       if (!pid || pid === id || pid.includes('/') || !topic.startsWith(base + '/p/')) return;
+      stats.rx++;
       let v = null; if (payload.length) { try { v = JSON.parse(payload.toString()); } catch {} }
       if (v && typeof v === 'object' && !Array.isArray(v)) pres.set(pid, v); else pres.delete(pid);
       rebuild();
     });
-    const publish = () => c.publish(mine, JSON.stringify(mine$), {qos: 0, retain: true});
-    c.on('connect', () => { if (Object.keys(mine$).length) publish(); });   // after a reconnect, say we're still here
-    await new Promise(res => c.subscribe(base + '/p/+', {qos: 0}, () => res()));
+    // One publish in flight at a time; newer state replaces anything still waiting, so a slow link never builds a
+    // backlog. The host's game state goes at QoS 0 (only the latest matters); a player's inputs go at QoS 1.
+    let busy = 0, again = false;
+    const publish = () => {
+      if (busy && performance.now() - busy < 3000) { again = true; stats.drop++; return; }
+      busy = performance.now(); again = false; stats.tx++;
+      c.publish(mine, JSON.stringify(mine$), {qos: mine$.s ? 0 : 1, retain: true}, () => { busy = 0; if (again) publish(); });
+    };
+    c.on('connect', () => { busy = 0; if (Object.keys(mine$).length) publish(); });   // after a reconnect, say we're still here
+    await new Promise(res => c.subscribe(base + '/p/+', v5 ? {qos: 1, nl: true} : {qos: 1}, () => res()));
     await new Promise(r => setTimeout(r, 900));   // retained presences arrive right after subscribing
     return {
-      name, url, hub: ![...pres.keys()].some(k => k !== id),   // hub: nobody else was in this room
+      name, url, stats, hz: 12, hub: ![...pres.keys()].some(k => k !== id),   // hub: nobody else was in this room
       peers: () => list,
       async presence(patch){
         mine$ = Object.assign({}, mine$);
@@ -942,7 +958,7 @@ function hostSync(){
     const a = p.presence.a; if (!Array.isArray(a)) return;
     for (const e of a) {
       if (!Array.isArray(e) || typeof e[0] !== 'number' || e[0] <= S.acks[i]) continue;
-      S.acks[i] = e[0];
+      S.acks[i] = e[0]; s.inputAt = now;
       if (typeof e[1] === 'string' && e[1].length === 1 && 'udlrbwqxJKFghij'.includes(e[1])) doAct(i, e[1]);
     }
   });
@@ -956,7 +972,7 @@ function hostSend(dt){
   NET.netT -= dt; if (NET.netT > 0) return;
   const js = JSON.stringify(snap);
   if (js === NET.sentJson) return;
-  NET.netT = 1 / T.NET_HZ; NET.sentJson = js;
+  NET.netT = 1 / (NET.game.hz || T.NET_HZ); NET.sentJson = js; NET.snapBytes = js.length;
   NET.game.presence({r: 'h', s: snap}).catch(() => {});
 }
 function clientSync(now){
@@ -969,6 +985,9 @@ function clientSync(now){
       NET.lastHostPres = host.presence; snap = host.presence.s;
       const slot = mySlot(), ack = slot >= 0 && Array.isArray(snap.k) ? +snap.k[slot] || 0 : 0;
       NET.pend = NET.pend.filter(e => e[0] > ack);
+    }
+    if (NET.pend.length && now - (NET.resentAt || 0) > 1000) {   // moves the host hasn't confirmed yet: send again
+      NET.resentAt = now; NET.game.presence({a: NET.pend}).catch(() => {});
     }
   } else if (now - (NET.seenHost || NET.joinedAt) > T.HOST_TIMEOUT * 1000) {
     leave(NET.seenHost ? 'The host left the game.' : 'No game found with code ' + NET.code + '.');
@@ -2159,6 +2178,24 @@ function flatline(){
   o.connect(gain).connect(AC.destination); o.start(); o.stop(t + 1);
 }
 function wakeLock(){ try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch {} }
+
+// ---- Debug panel (open the game with #debug at the end of the address) -------------
+const DEBUG = location.hash === '#debug';
+if (DEBUG) setInterval(() => {
+  const now = performance.now(), g = NET.game, st = g && g.stats, lines = [];
+  lines.push('role ' + (NET.role || '-') + '  code ' + (NET.code || '-') + '  phase ' + (snap ? snap.ph : '-'));
+  lines.push('link ' + (st ? st.url.replace(/^wss?:\/\//, '') + (st.v5 ? ' v5' : ' v4') + '  rx ' + st.rx + '  tx ' + st.tx + '  merged ' + st.drop : g ? 'claude room' : 'none'));
+  lines.push('me ' + (NET.myPeer || '-') + '  slot ' + mySlot());
+  if (NET.role === 'client') {
+    const sl = mySlot(), ack = snap && Array.isArray(snap.k) && sl >= 0 ? snap.k[sl] : '-';
+    lines.push('sent ' + NET.seq + '  acked ' + ack + '  waiting ' + NET.pend.length + '  host seen ' + (NET.seenHost ? Math.round(now - NET.seenHost) + 'ms ago' : 'never'));
+  }
+  if (S && NET.role === 'host') {
+    lines.push('state ' + (NET.snapBytes || 0) + 'B');
+    S.seats.forEach((x, i) => { if (x) lines.push(i + ' ' + x.kind + ' ' + (x.peer || '') + (x.kind === 'p' ? '  ack ' + S.acks[i] + '  last input ' + (x.inputAt ? Math.round(now - x.inputAt) + 'ms' : 'never') + (x.lost ? '  MISSING ' + Math.round(now - x.lost) + 'ms' : '') + (x.gone ? '  GONE' : '') : '')); });
+  }
+  $('dbg').hidden = false; $('dbg').textContent = lines.join('\n');
+}, 250);
 
 // ---- Main loop ------------------------------------------------------------------
 const STEP = 1 / 60;
