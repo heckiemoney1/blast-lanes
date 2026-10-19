@@ -1804,81 +1804,101 @@ const SETTINGS = [
       R(1, 1, 14, 15, '#1a3a5a'); R(2, 2, 12, 13, '#7fc8f0'); R(2, 2, 12, 2, '#d8f4ff'); R(2, 2, 2, 12, '#b8e4ff');
       R(7, 5, 1, 4, '#4a9ad0'); R(8, 9, 2, 1, '#4a9ad0'); R(10, 10, 1, 3, '#4a9ad0'); R(2, 14, 12, 1, '#3a7ab0'); })},
 ];
-// The Wilds: overgrown, magical places (inspired by the biomes of Magicite), drawn in the same 16x16 tile style.
-const tree = (canopy, light, dark, trunk, trim) => tile(R => {
-  R(3, 0, 10, 1, dark); R(1, 1, 14, 2, canopy); R(0, 3, 16, 6, canopy); R(1, 9, 14, 2, dark);
-  R(3, 1, 4, 1, light); R(2, 2, 3, 2, light); R(9, 3, 3, 2, light); R(5, 6, 2, 1, light); R(12, 6, 2, 2, light);
-  R(1, 8, 3, 1, dark); R(8, 7, 3, 1, dark);
-  R(0, 11, TS, 5, trunk); R(6, 11, 4, 5, dark); R(7, 12, 1, 3, trunk); R(0, 11, TS, 1, trim); R(0, 15, TS, 1, 'rgba(0,0,0,.4)');
+// The Wilds: inspired by the biomes of Magicite. Near-black ground where the color comes from bright, jagged grass
+// crusts, tall thin plants and things that glow. Drawn in chunky doubled pixels (an 8x8 grid per tile).
+function chunky(fn){ return tile((R, g) => fn((x, y, w, h, col) => R(x * 2, y * 2, w * 2, h * 2, col), g)); }
+// A block of dark earth: its top crusted in the biome's grass, a bright jagged lip spilling over its face.
+// plant(R) draws something growing out of it (on some walls only).
+function earth(P, plant){
+  return chunky(R => {
+    R(0, 0, 8, 5, P.top);
+    for (const [x, y] of [[1, 1], [4, 0], [6, 2], [2, 3], [5, 4]]) R(x, y, 1, 1, P.tuft);
+    R(0, 5, 8, 3, P.dirt);
+    for (const [x, y] of [[1, 6], [5, 7], [3, 7]]) R(x, y, 1, 1, P.speck);
+    for (let x = 0; x < 8; x++) R(x, 5, 1, (x * 5 + 3) % 3 === 0 ? 2 : 1, P.lip);   // the jagged grass lip
+    R(1, 5, 1, 1, P.hi); R(4, 5, 1, 1, P.hi); R(6, 5, 1, 1, P.hi);
+    if (plant) plant(R);
+  });
+}
+const ore = (vein, glint) => chunky(R => {   // a cobblestone ore node with colored veins
+  R(0, 1, 8, 7, OUT); R(1, 1, 6, 6, '#4a4e4a'); R(1, 1, 6, 1, '#6e726a');
+  R(1, 3, 3, 1, '#2e322e'); R(4, 5, 3, 1, '#2e322e'); R(3, 1, 1, 2, '#2e322e'); R(5, 2, 1, 3, '#2e322e');
+  R(2, 2, 1, 1, vein); R(5, 4, 1, 1, vein); R(2, 5, 2, 1, vein); R(6, 2, 1, 1, glint);
 });
+// Floors: almost black, a few dim specks and tufts; glow() adds the odd thing that shines.
+const darkFloor = (base, speck, tuft, tuft2) => (R, x, y, r) => {
+  R(0, 0, TS, TS, base);
+  for (let k = 0; k < 3; k++) R(((r() * 8) | 0) * 2, ((r() * 8) | 0) * 2, 2, 2, speck);
+  if (r() < .45) { const a = 1 + ((r() * 6) | 0), c = 3 + ((r() * 4) | 0); R(a * 2, c * 2, 2, 4, tuft); R(a * 2 + 2, c * 2 - 2, 2, 6, tuft2); R(a * 2 + 4, c * 2 + 2, 2, 2, tuft); }
+};
+const motes = col => (R, x, y, r) => { if (r() < .08) R(((r() * 7) | 0) * 2, ((r() * 7) | 0) * 2, 2, 2, col); };
 SETTINGS.push(
-  {name: 'Deep Forest', grp: 'wild', amb: 'rgb(96,122,100)', fx: 'fireflies', neon: '#7dff6a', neon2: '#2de2c0',
-    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#1a2416' : '#1c2718');
-      if (hash(x, y, 7) < .35) { R(2, 3, 8, 5, '#243a1e'); R(4, 2, 6, 7, '#243a1e'); }
-      for (let k = 0; k < 4; k++) { const a = (r() * 14) | 0, c = (r() * 13) | 0; R(a, c + 1, 1, 2, '#4f8a32'); R(a + 1, c, 1, 3, '#7cc24a'); }
-      if (r() < .4) R((r() * 14) | 0, (r() * 14) | 0, 2, 1, '#3a3a30'); },
-    walls: () => [tree('#2f6b2a', '#5fa83a', '#1e4a1c', '#4a3020', '#7dff6a'), tree('#2a5e30', '#4f9a44', '#1a4020', '#3e2716', '#7dff6a')],
-    crate: () => tile(R => {   // mossy boulder
-      R(2, 2, 12, 13, OUT); R(3, 3, 10, 11, '#6b6f66'); R(3, 3, 10, 1, '#8a8e84'); R(3, 3, 1, 10, '#8a8e84'); R(9, 8, 3, 2, '#4e524a');
-      R(3, 2, 6, 2, '#4f8a32'); R(5, 1, 3, 1, '#7cc24a'); R(10, 3, 3, 1, '#4f8a32'); R(3, 13, 10, 1, '#4e524a'); })},
-  {name: 'Spore Swamp', grp: 'wild', amb: 'rgb(100,98,124)', fx: 'spores', neon: '#b967ff', neon2: '#3ad6a0',
-    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#142019' : '#16231b');
-      if (hash(x, y, 8) < .25) { R(2, 4, 12, 7, '#0c1a1c'); R(4, 3, 8, 9, '#0c1a1c'); R(5, 5, 4, 1, '#2a6a66'); R(9, 8, 3, 1, '#1e4e4c'); }
-      for (let k = 0; k < 3; k++) { const a = (r() * 14) | 0, c = (r() * 13) | 0; R(a, c, 1, 3, '#6a3aa8'); R(a + 1, c + 1, 1, 2, '#8a4ad0'); } },
-    glow(R, x, y){ if (hash(x, y, 8) < .25) R(5, 5, 4, 1, '#3ad6a0'); },
-    walls: () => [tree('#5a2a8a', '#8a4ad0', '#3a1a5e', '#2e2420', '#b967ff')],
-    crate: () => tile(R => {   // mossy stump sprouting glowing teal caps
-      R(2, 4, 12, 12, OUT); R(3, 5, 10, 10, '#5a4a2a'); R(3, 5, 10, 2, '#6e8a3a'); R(4, 7, 1, 7, '#45381e'); R(8, 8, 1, 6, '#45381e'); R(11, 7, 1, 7, '#45381e');
-      R(4, 2, 4, 3, OUT); R(5, 2, 2, 2, '#3ad6a0'); R(9, 1, 5, 4, OUT); R(10, 1, 3, 2, '#3ad6a0'); R(10, 1, 1, 1, '#c8fff0'); R(11, 3, 1, 2, '#e8dcc0'); })},
-  {name: 'Red Veldt', grp: 'wild', amb: 'rgb(128,102,98)', fx: 'petals', neon: '#ff6a4a', neon2: '#ffb84a',
-    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#4a1a1e' : '#521c22');
-      for (let k = 0; k < 6; k++) { const a = (r() * 15) | 0, c = (r() * 13) | 0; R(a, c, 1, 3, r() < .5 ? '#8a2a30' : '#c04040'); }
-      if (hash(x, y, 9) < .2) R(4, 6, 7, 4, '#3a2418'); },
-    walls: () => [tree('#9a2a2a', '#d24a3a', '#6a1a1e', '#4a2a1a', '#ffb84a'), tree('#a8382a', '#e8603a', '#701e1a', '#4a2a1a', '#ffb84a')],
-    crate: () => tile(R => {   // big spotted golden mushroom
-      R(1, 1, 14, 9, OUT); R(2, 2, 12, 7, '#e8a030'); R(2, 2, 12, 1, '#ffd070'); R(4, 3, 3, 2, '#fff6e0'); R(9, 4, 2, 2, '#fff6e0'); R(12, 6, 1, 1, '#fff6e0'); R(2, 8, 12, 1, '#a86a18');
-      R(5, 9, 6, 6, OUT); R(6, 9, 4, 5, '#f0e2c8'); R(6, 9, 4, 1, '#c8b494'); })},
-  {name: 'Crystal Quarry', grp: 'wild', amb: 'rgb(104,128,142)', fx: 'sparkle', neon: '#5ff8e8', neon2: '#e8fbff',
-    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#22303a' : '#253540'); R(0, TS - 1, TS, 1, '#18222a'); R(TS - 1, 0, 1, TS, '#18222a');
-      if (r() < .5) R(((r() * 10) | 0) + 2, ((r() * 10) | 0) + 2, 4, 1, '#1a262e');
-      if (hash(x, y, 10) < .3) { const a = 3 + ((x * 7) % 9), c = 4 + ((y * 5) % 8); R(a, c, 1, 2, '#8af0f0'); R(a + 1, c + 1, 1, 1, '#d8fffb'); } },
-    glow(R, x, y){ if (hash(x, y, 10) < .3) R(3 + ((x * 7) % 9), 4 + ((y * 5) % 8), 2, 2, '#5ff8e8'); },
-    walls: () => [tile(R => {   // crystal cluster on rock
-      R(0, 6, TS, 5, '#3a4a56'); R(0, 6, TS, 1, '#506270');
-      R(2, 1, 3, 9, '#2aa8b0'); R(3, 0, 1, 1, '#d8fffb'); R(3, 1, 2, 8, '#7af0e8'); R(3, 2, 1, 5, '#d8fffb');
-      R(7, 3, 3, 7, '#2aa8b0'); R(8, 2, 1, 1, '#d8fffb'); R(8, 3, 2, 6, '#7af0e8');
-      R(11, 4, 3, 6, '#2aa8b0'); R(12, 4, 2, 5, '#7af0e8'); R(12, 5, 1, 2, '#d8fffb');
-      R(0, 11, TS, 5, '#2a3640'); R(0, 11, TS, 1, '#5ff8e8'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
-    blink: (x, y, t) => hash(x, y, (t / 300) | 0) < .2 ? [3 + ((x + y) % 3) * 4, 2 + (x % 3), '#ffffff'] : null,
-    crate: () => tile(R => {   // geode, cracked open
-      R(2, 2, 12, 13, OUT); R(3, 3, 10, 11, '#56606a'); R(3, 3, 10, 1, '#727e8a'); R(5, 6, 6, 6, '#1a2a34');
-      R(6, 7, 1, 3, '#7af0e8'); R(8, 6, 1, 4, '#d8fffb'); R(9, 8, 1, 3, '#7af0e8'); R(7, 10, 2, 1, '#2aa8b0'); })},
-  {name: 'Volcano', grp: 'wild', amb: 'rgb(132,98,86)', fx: 'embers', neon: '#ff7a1a', neon2: '#ffd23f',
-    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#1e1414' : '#221616');
-      for (let k = 0; k < 5; k++) R((r() * 15) | 0, (r() * 15) | 0, 1, 1, '#2e1e1c');
-      if (hash(x, y, 11) < .22) { R(2, 7, 5, 1, '#5a1a0a'); R(6, 8, 4, 1, '#5a1a0a'); R(9, 9, 5, 1, '#5a1a0a'); } },
-    glow(R, x, y){ if (hash(x, y, 11) < .22) { R(2, 7, 5, 1, '#ff5a1a'); R(6, 8, 4, 1, '#ff7a1a'); R(9, 9, 5, 1, '#ff5a1a'); } },
-    walls: () => [tile(R => {   // orange pillar tree
-      R(2, 0, 12, 3, '#ff8a2a'); R(3, 0, 10, 1, '#ffc060'); R(1, 3, 14, 3, '#e86a1a'); R(2, 6, 12, 3, '#ff8a2a'); R(3, 6, 10, 1, '#ffc060');
-      R(1, 9, 14, 2, '#b84a10'); R(2, 3, 2, 1, '#ffd23f'); R(11, 7, 2, 1, '#ffd23f');
-      R(0, 11, TS, 5, '#3a1a10'); R(6, 11, 4, 5, '#2a120a'); R(0, 11, TS, 1, '#ff7a1a'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
-    lamp: (x, y) => hash(x, y, 12) < .15 ? '#ff7a1a' : null,
-    crate: () => tile(R => {   // obsidian with ore
-      R(2, 2, 12, 13, OUT); R(3, 3, 10, 11, '#241a20'); R(3, 3, 10, 1, '#3e3038'); R(5, 5, 2, 1, '#ff9a3c'); R(9, 7, 2, 2, '#ff7a1a');
-      R(6, 10, 1, 2, '#ffd23f'); R(11, 11, 1, 1, '#ff9a3c'); })},
-  {name: 'Cosmic Crater', grp: 'wild', amb: 'rgb(112,94,144)', fx: 'cosmic', neon: '#ff4fd8', neon2: '#7a6aff',
-    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#140e24' : '#170f2a');
-      for (let k = 0; k < 3; k++) R((r() * 15) | 0, (r() * 15) | 0, 1, 1, r() < .7 ? '#e8e0ff' : '#ff9ae8');
-      if (hash(x, y, 13) < .12) { R(4, 5, 8, 6, '#0e0a1a'); R(5, 4, 6, 8, '#0e0a1a'); R(5, 5, 3, 1, '#2a2048'); } },
-    glow(R, x, y, r){ if (r() < .15) R((r() * 15) | 0, (r() * 15) | 0, 1, 1, '#ff4fd8'); },
-    walls: () => [tile(R => {   // rock spire with pink crystal tips
-      R(4, 1, 8, 10, '#3a2a5a'); R(2, 4, 12, 7, '#3a2a5a'); R(4, 1, 2, 10, '#4e3a76'); R(6, 0, 3, 3, '#ff4fd8'); R(7, 0, 1, 1, '#ffd0f4');
-      R(12, 3, 2, 3, '#ff4fd8'); R(2, 5, 2, 2, '#c03aa8');
-      R(0, 11, TS, 5, '#261a3e'); R(0, 11, TS, 1, '#ff4fd8'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
-    blink: (x, y, t) => [7, 0, ((t / 260 + x + y) | 0) & 1 ? '#ffd0f4' : '#ff4fd8'],
-    crate: () => tile(R => {   // meteorite with a glowing seam
-      R(2, 2, 12, 13, OUT); R(3, 3, 10, 11, '#6a5a58'); R(3, 3, 10, 1, '#8a7a76'); R(4, 9, 2, 2, '#4a3e3e'); R(10, 5, 2, 2, '#4a3e3e');
-      R(5, 5, 2, 1, '#ff7ae0'); R(7, 6, 2, 1, '#ff7ae0'); R(8, 7, 1, 2, '#ffd0f4'); R(9, 9, 2, 1, '#ff7ae0'); })},
+  {name: 'Deep Forest', grp: 'wild', amb: 'rgb(64,82,66)', fx: 'fireflies', neon: '#6ac03a', neon2: '#2de2c0',
+    floor: darkFloor('#070906', '#11180d', '#2c5a1e', '#4f9a2a'), glow: motes('#6ac03a'),
+    walls: () => {
+      const P = {top: '#1d3a16', tuft: '#3f7a26', dirt: '#0b0d09', speck: '#181c12', lip: '#6ac03a', hi: '#a8e860'};
+      return [earth(P), earth(P), earth(P, R => {   // a layered canopy tree on a thin trunk
+        R(3, 1, 1, 4, '#6a4a2a'); R(1, 0, 6, 2, '#4fa83a'); R(2, 0, 3, 1, '#8ad04a'); R(0, 2, 3, 1, '#4fa83a'); R(5, 2, 3, 1, '#4fa83a'); R(5, 2, 1, 1, '#8ad04a');
+      })];
+    },
+    lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#6ac03a' : null,
+    crate: () => ore('#5fbf3a', '#c8ff9a')},
+  {name: 'Spore Swamp', grp: 'wild', amb: 'rgb(66,66,92)', fx: 'motes', neon: '#7a3aff', neon2: '#3ad6c0',
+    floor: darkFloor('#06070a', '#10121a', '#1e3a3a', '#2a6a5a'), glow: motes('#3ad6c0'),
+    walls: () => {
+      const P = {top: '#14222a', tuft: '#1e4a4a', dirt: '#08090c', speck: '#12141c', lip: '#2a8a6a', hi: '#4fd0b0'};
+      return [earth(P), earth(P), earth(P, R => {   // a green vine with purple leaves
+        R(3, 0, 1, 5, '#2a8a3a'); R(1, 0, 2, 1, '#6a2ad0'); R(4, 1, 2, 1, '#9a5aff'); R(1, 2, 2, 1, '#9a5aff'); R(4, 3, 2, 1, '#6a2ad0'); R(2, 1, 1, 1, '#9a5aff');
+      })];
+    },
+    lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#7a3aff' : null,
+    crate: () => ore('#3ad6c0', '#c8fff0')},
+  {name: 'Red Veldt', grp: 'wild', amb: 'rgb(92,64,66)', fx: 'petals', neon: '#ff6a6a', neon2: '#ff9a7a',
+    floor: darkFloor('#0b0505', '#1c0c0c', '#5a1a1a', '#a02a2a'), glow: motes('#ff8a8a'),
+    walls: () => {
+      const P = {top: '#3a0e10', tuft: '#6a1a1c', dirt: '#0c0606', speck: '#1e0c0c', lip: '#c03030', hi: '#ff6a5a'};
+      return [earth(P), earth(P), earth(P, R => {   // a pink pom-pom flower on a leafy stalk
+        R(3, 2, 1, 3, '#8a3a2a'); R(2, 3, 1, 1, '#e05a5a'); R(4, 4, 1, 1, '#e05a5a');
+        R(2, 0, 3, 2, '#ff8a8a'); R(3, 0, 1, 1, '#ffc8c0'); R(2, 1, 1, 1, '#d85a6a');
+      })];
+    },
+    lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#ff8a8a' : null,
+    crate: () => ore('#ff7a9a', '#ffd8e0')},
+  {name: 'Crystal Quarry', grp: 'wild', amb: 'rgb(72,74,100)', fx: 'sparkle', neon: '#a08aff', neon2: '#7af0e8',
+    floor: darkFloor('#06070b', '#121624', '#2a2a4a', '#4a4a7a'), glow: motes('#c8b8ff'),
+    walls: () => {
+      const P = {top: '#1a1a30', tuft: '#2e2e52', dirt: '#08080e', speck: '#14142a', lip: '#6a5ad0', hi: '#c8b8ff'};
+      return [earth(P), earth(P), earth(P, R => {   // a glowing lavender crystal branch
+        R(3, 1, 1, 4, '#c8b8ff'); R(2, 2, 1, 1, '#a08aff'); R(1, 1, 1, 1, '#d8ccff'); R(4, 2, 1, 1, '#a08aff'); R(5, 1, 1, 1, '#ffffff');
+        R(4, 0, 1, 1, '#d8ccff'); R(2, 0, 1, 1, '#ffffff');
+      })];
+    },
+    lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#c8b8ff' : null,
+    crate: () => ore('#7af0e8', '#ffffff')},
+  {name: 'Volcano', grp: 'wild', amb: 'rgb(96,64,56)', fx: 'embers', neon: '#ff6a1a', neon2: '#ffb03a',
+    floor: darkFloor('#0a0504', '#1e0c08', '#3a1408', '#5a2008'),
+    glow(R, x, y, r){ if (hash(x, y, 11) < .2) { R(2, 8, 6, 2, '#ff5a1a'); R(8, 10, 6, 2, '#ff7a1a'); } },
+    walls: () => {
+      const P = {top: '#3a1408', tuft: '#5a2008', dirt: '#0c0504', speck: '#22100a', lip: '#ff6a1a', hi: '#ffc040'};
+      return [earth(P), earth(P), earth(P, R => {   // a thin orange flame tree
+        R(3, 1, 1, 4, '#e86a1a'); R(2, 2, 1, 1, '#ff8a2a'); R(4, 3, 1, 1, '#ff8a2a'); R(3, 0, 1, 1, '#ffd23f'); R(2, 0, 1, 1, '#ff8a2a'); R(4, 0, 1, 1, '#ff5a1a');
+      })];
+    },
+    lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#ff7a1a' : null,
+    crate: () => ore('#ff7a1a', '#ffd23f')},
+  {name: 'Cosmic Crater', grp: 'wild', amb: 'rgb(74,62,100)', fx: 'cosmic', neon: '#c03ad0', neon2: '#3ad6e8',
+    floor(R, x, y, r){ darkFloor('#06040b', '#120c1e', '#2a1a4a', '#4a2a7a')(R, x, y, r); if (r() < .3) R(((r() * 8) | 0) * 2, ((r() * 8) | 0) * 2, 1, 1, r() < .7 ? '#e8e0ff' : '#ff9ae8'); },
+    glow: motes('#3ad6e8'),
+    walls: () => {
+      const P = {top: '#1e0c2e', tuft: '#3a1a5a', dirt: '#07040c', speck: '#160c24', lip: '#b03ad0', hi: '#ff7ae8'};
+      return [earth(P), earth(P), earth(P, R => {   // a purple vine with glowing cyan buds
+        R(3, 0, 1, 5, '#7a3ad0'); R(2, 1, 1, 1, '#9a5aff'); R(4, 2, 1, 1, '#9a5aff'); R(1, 0, 1, 1, '#3ad6e8'); R(5, 1, 1, 1, '#3ad6e8'); R(2, 3, 1, 1, '#9a5aff');
+      })];
+    },
+    lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#3ad6e8' : null,
+    crate: () => chunky(R => {   // a meteorite with a glowing seam
+      R(0, 1, 8, 7, OUT); R(1, 1, 6, 6, '#5a4a4a'); R(1, 1, 6, 1, '#7a6a66'); R(2, 4, 1, 1, '#3a2e2e'); R(5, 2, 1, 1, '#3a2e2e');
+      R(2, 2, 1, 1, '#ff7ae0'); R(3, 3, 1, 1, '#ff7ae0'); R(4, 4, 1, 1, '#ffd0f4'); R(5, 5, 1, 1, '#ff7ae0'); })},
 );
 for (const E of SETTINGS) E.grp = E.grp || 'city';
 const ENV_GROUPS = {
@@ -2437,7 +2457,7 @@ let wx = [], wxKind = '', thunderAt = 0;
 function weather(kind, dt, now){
   if (reduce || kind === 'none' || !kind) { wx = []; return; }
   if (kind !== wxKind) { wx = []; wxKind = kind; }
-  const want = {rain: 70, snow: 40, data: 26, steam: 14, bubbles: 16, fireflies: 14, spores: 22, petals: 18, sparkle: 18, embers: 26, cosmic: 12}[kind] || 0;
+  const want = {rain: 70, snow: 40, data: 26, steam: 14, bubbles: 16, fireflies: 14, spores: 22, petals: 18, sparkle: 18, embers: 26, cosmic: 12, motes: 18}[kind] || 0;
   while (wx.length < want) wx.push({x: Math.random() * BW, y: Math.random() * BH, v: Math.random(), age: Math.random() * 3});
   for (const p of wx) {
     p.age += dt;
@@ -2467,6 +2487,12 @@ function weather(kind, dt, now){
       if (p.y < -2 || p.age > 6) { p.y = BH + 2; p.x = Math.random() * BW; p.age = 0; }
       b.fillStyle = kind === 'embers' ? `rgba(255,${140 + ((p.v * 100) | 0)},40,${.9 - p.age / 7})` : `rgba(200,120,255,${.55 - p.age / 12})`;
       b.fillRect(p.x | 0, p.y | 0, 1, kind === 'embers' && p.v < .3 ? 2 : 1);
+    } else if (kind === 'motes') {   // chunky cyan specks hanging in the dark, slowly drifting
+      p.x += Math.sin(p.age * .4 + p.v * 20) * dt * 4; p.y -= dt * (1.5 + p.v * 3);
+      if (p.y < -2 || p.age > 14) { p.y = Math.random() * BH; p.x = Math.random() * BW; p.age = 0; }
+      const a = Math.min(1, p.age / 1.5, (14 - p.age) / 1.5) * (.55 + .35 * Math.sin(p.age * 1.8 + p.v * 9));
+      b.fillStyle = `rgba(58,214,224,${a * .25})`; b.fillRect((p.x | 0) - 1, (p.y | 0) - 1, 4, 4);
+      b.fillStyle = `rgba(120,240,240,${a})`; b.fillRect(p.x | 0, p.y | 0, 2, 2);
     } else if (kind === 'petals') {   // red petals blowing across
       p.x += dt * (18 + p.v * 14); p.y += Math.sin(p.age * 2 + p.v * 9) * dt * 6 + dt * 4;
       if (p.x > BW + 2 || p.y > BH) { p.x = -3; p.y = Math.random() * BH; }
