@@ -11,7 +11,7 @@
 <link rel="apple-touch-icon" href="icon.png">
 <link rel="icon" href="icon.png">
 <style>:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}</style>
-<script src="peerjs.min.js"></script>
+<script src="mqtt.min.js"></script>
 </head>
 <body>
 <title>Blast Lanes</title>
@@ -782,77 +782,68 @@ $('hostBtn').disabled = $('joinBtn').disabled = $('code').disabled = true;   // 
 (async () => {
   let room = null;
   try { room = window.claude && window.claude.use ? await window.claude.use('room') : null; } catch { room = null; }
-  if (!room && !window.claude && window.Peer) room = peerNet();   // hosted outside claude.ai: phones connect directly
+  if (!room && !window.claude && window.mqtt) room = relayNet();   // hosted outside claude.ai: phones meet on a public relay
   NET.room = room;
   $('netNote').hidden = !!room;
   $('hostBtn').disabled = $('joinBtn').disabled = $('code').disabled = !room;
   if (room) room.onPeers(renderGames, () => { NET.room = null; renderGames(); });
 })();
 
-// PeerJS stand-in with the room capability's shape (join -> presence/peers/leave), so the
-// game code doesn't care which one it runs on. Star layout: the first phone to claim a
-// code's id is the hub and relays everyone's presence; joiners connect to it.
-function peerNet(){
-  const OPTS = window.BL_PEER_OPTS || {};
-  const openPeer = id => new Promise((res, rej) => {
-    const p = id ? new Peer(id, OPTS) : new Peer(OPTS);
-    const fail = e => { p.off('open', ok); p.destroy(); rej(e); };
-    const ok = () => { p.off('error', fail); res(p); };
-    p.once('open', ok); p.once('error', fail);
-  });
-  async function join(name){
-    const id = 'blastlanes-' + name, pres = new Map(), conns = new Map();
-    let peer, hub = true, mine = {}, list = Object.freeze([]);
-    try { peer = await openPeer(id); }
-    catch (e) { if (e.type !== 'unavailable-id') throw e; hub = false; peer = await openPeer(null); }
-    const me = peer.id;
+// Hosted outside claude.ai, phones talk through a free public MQTT relay over an ordinary secure WebSocket,
+// which gets through any Wi-Fi or cellular network (direct phone-to-phone links often can't). Same shape as
+// the room capability (join -> presence/peers/leave), so the game code doesn't care which one it runs on.
+// Each phone keeps its presence as a retained message at blastlanes/1/<room>/p/<id>; its "last will" clears
+// that message if the phone drops, so departed players vanish on their own.
+const RELAYS = window.BL_RELAYS || ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt'];
+function relayNet(){
+  async function openRoom(url, name){
+    const id = 'bl' + Math.random().toString(36).slice(2, 12), base = 'blastlanes/1/' + name, mine = base + '/p/' + id;
+    const c = mqtt.connect(url, {clientId: id, clean: true, keepalive: 10, connectTimeout: 6000, reconnectPeriod: 2000,
+      will: {topic: mine, payload: '', retain: true, qos: 0}});
+    c.on('error', () => {});
+    await new Promise((res, rej) => {
+      const t = setTimeout(() => { c.end(true); rej(new Error('timeout')); }, 6500);
+      c.once('connect', () => { clearTimeout(t); res(); });
+    });
+    const pres = new Map(); let mine$ = {}, list = Object.freeze([]);
     const rebuild = () => { list = Object.freeze([...pres].map(([pid, v]) => Object.freeze(
-      {peer: pid, by: null, isMe: pid === me, sameTab: pid === me, kind: 'viewer', guest: false, presence: v, updatedAt: Date.now()}))); };
-    const send = (c, m) => { try { if (c.open) c.send(m); } catch {} };
-    const seen = new Map();   // hub: peer id -> last time we heard from it
-    const plain = v => (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
-    pres.set(me, mine); rebuild();
-    const wire = c => {
-      c.on('data', m => {
-        seen.set(c.peer, Date.now());
-        if (!plain(m) || m.t === 'k') return;
-        if (hub) {
-          if (m.t !== 'p' || !plain(m.pres)) return;
-          pres.set(c.peer, m.pres); rebuild();
-          for (const [k, o] of conns) if (k !== c.peer) send(o, {t: 'p', peer: c.peer, pres: m.pres});
-        } else if (m.t === 'p' && typeof m.peer === 'string' && plain(m.pres)) { pres.set(m.peer, m.pres); rebuild(); }
-        else if (m.t === 'bye' && m.peer !== me) { pres.delete(m.peer); rebuild(); }
-        else if (m.t === 'all' && Array.isArray(m.list)) { for (const e of m.list) if (Array.isArray(e) && e[0] !== me && plain(e[1])) pres.set(e[0], e[1]); rebuild(); }
-      });
-      c.on('close', () => {
-        if (conns.get(c.peer) !== c) return;   // already dropped
-        conns.delete(c.peer);
-        if (hub) { pres.delete(c.peer); for (const o of conns.values()) send(o, {t: 'bye', peer: c.peer}); }
-        else for (const k of [...pres.keys()]) if (k !== me) pres.delete(k);   // lost the hub
-        rebuild();
-      });
-    };
-    peer.on('error', () => {});
-    const beat = setInterval(() => {
-      if (hub) {
-        for (const [k, c] of conns) if (Date.now() - (seen.get(k) || Date.now()) > 10000) { c.emit('close'); try { c.close(); } catch {} }
-      } else for (const c of conns.values()) send(c, {t: 'k'});
-    }, 2500);
-    if (hub) peer.on('connection', c => { conns.set(c.peer, c); seen.set(c.peer, Date.now()); wire(c); c.on('open', () => send(c, {t: 'all', list: [...pres]})); });
-    else { const c = peer.connect(id, {reliable: true}); conns.set(id, c); wire(c); c.on('open', () => send(c, {t: 'p', pres: mine})); }
+      {peer: pid, by: null, isMe: pid === id, sameTab: pid === id, kind: 'viewer', guest: false, presence: v, updatedAt: Date.now()}))); };
+    pres.set(id, mine$); rebuild();
+    c.on('message', (topic, payload) => {
+      const pid = topic.slice(base.length + 3);
+      if (!pid || pid === id || pid.includes('/') || !topic.startsWith(base + '/p/')) return;
+      let v = null; if (payload.length) { try { v = JSON.parse(payload.toString()); } catch {} }
+      if (v && typeof v === 'object' && !Array.isArray(v)) pres.set(pid, v); else pres.delete(pid);
+      rebuild();
+    });
+    const publish = () => c.publish(mine, JSON.stringify(mine$), {qos: 0, retain: true});
+    c.on('connect', () => { if (Object.keys(mine$).length) publish(); });   // after a reconnect, say we're still here
+    await new Promise(res => c.subscribe(base + '/p/+', {qos: 0}, () => res()));
+    await new Promise(r => setTimeout(r, 900));   // retained presences arrive right after subscribing
     return {
-      name, hub,
+      name, url, hub: ![...pres.keys()].some(k => k !== id),   // hub: nobody else was in this room
       peers: () => list,
       async presence(patch){
-        mine = Object.assign({}, mine);
-        for (const k in patch) { if (patch[k] === null) delete mine[k]; else mine[k] = patch[k]; }
-        pres.set(me, mine); rebuild();
-        for (const c of conns.values()) send(c, hub ? {t: 'p', peer: me, pres: mine} : {t: 'p', pres: mine});
+        mine$ = Object.assign({}, mine$);
+        for (const k in patch) { if (patch[k] === null) delete mine$[k]; else mine$[k] = patch[k]; }
+        pres.set(id, mine$); rebuild(); publish();
       },
-      async leave(){ clearInterval(beat); for (const c of conns.values()) try { c.close(); } catch {} peer.destroy(); },
+      async leave(){ c.publish(mine, '', {qos: 0, retain: true}); setTimeout(() => c.end(true), 300); },
     };
   }
-  // No shared lobby without a server, so the open-games list stays empty; codes still work.
+  // Hosting takes the first relay that answers; joining ({find: true}) checks each relay for the host.
+  async function join(name, opt){
+    let first = null;
+    for (const url of RELAYS) {
+      let r; try { r = await openRoom(url, name); } catch { continue; }
+      if (!(opt && opt.find)) return r;
+      if (!r.hub) { if (first) first.leave(); return r; }
+      if (first) r.leave(); else first = r;
+    }
+    if (first) return first;   // nobody hosting on any relay: the caller sees hub === true
+    throw new Error('no relay reachable');
+  }
+  // No shared lobby, so the open-games list stays empty; codes still work.
   return {join, peers: () => [], onPeers: () => () => {}, presence: async () => {}};
 }
 
@@ -906,7 +897,7 @@ async function openJoin(code){
   code = (code || '').toUpperCase();
   if (!/^[A-Z]{4}$/.test(code)) return toast('Room codes are 4 letters.');
   let g;
-  try { g = await NET.room.join('bl-' + code.toLowerCase()); }
+  try { g = await NET.room.join('bl-' + code.toLowerCase(), {find: true}); }
   catch { return toast('Could not join that room. Check your connection and try again.'); }
   if (g.hub === true) { g.leave(); return toast('No game found with code ' + code + '.'); }   // nobody was hosting it
   NET.game = g;
