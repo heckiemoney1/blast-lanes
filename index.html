@@ -128,7 +128,9 @@
   .chip > div{min-width:0; display:flex; flex-direction:column; gap:3px}
   .chip span{font-size:17px; line-height:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
   .pips{display:flex; gap:2px}
-  .pips u{width:8px; height:4px; background:var(--edge); text-decoration:none}
+  .pips u{width:8px; height:4px; background:var(--edge); text-decoration:none; flex:none}
+  .pips{align-items:center}
+  .pips b{font:700 7px var(--pix); line-height:1; margin-left:1px}
   .clock{align-self:center; font:700 16px var(--pix); font-variant-numeric:tabular-nums; padding:0 2px; text-align:center; line-height:1}
   .clock small{display:block; font:400 9px var(--pix); letter-spacing:1px; color:var(--dim); margin-top:3px}
   .clock.sd{color:var(--hot); text-shadow:0 0 8px var(--hot)}
@@ -141,11 +143,23 @@
   .hint{color:var(--dim); font-size:18px; text-align:center; display:flex; gap:12px; align-items:center; justify-content:center; width:100%; max-width:540px}
   .hint b{color:var(--ink); font-weight:400}
   .hint button{padding:7px 12px; font-size:11px}
+  body.tv .hint .bugOpen{display:none}
+  body.tv .hud,body.tv .stage,body.tv .hint{max-width:min(96vw,1100px)}
+  body.tv .chip span{font-size:24px}
+  body.tv .clock{font-size:24px}
   .over{position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px;
     background:rgba(7,6,11,.86); padding:20px; text-align:center}
   .over h2{margin:0; font:700 clamp(22px,7vw,36px) var(--pix); text-shadow:2px 0 var(--hot), -2px 0 var(--cyan)}
   .over p{margin:0; color:var(--dim)}
   .over .row{width:100%; max-width:320px}
+  .over{overflow-y:auto; justify-content:safe center}
+  .awards{display:flex; flex-direction:column; gap:4px; width:100%; max-width:320px}
+  .award{display:flex; align-items:center; gap:8px; padding:4px 8px; background:var(--panel); box-shadow:inset 3px 0 0 var(--c); text-align:left}
+  .award canvas{width:24px; height:24px; flex:none}
+  .award div{flex:1; min-width:0; line-height:1.05}
+  .award b{display:block; font:700 9px var(--pix); letter-spacing:1px; text-transform:uppercase; color:var(--warn)}
+  .award span{font-size:17px}
+  #shareBtn{width:100%; max-width:320px}
   .respawn{position:absolute; left:50%; bottom:10px; transform:translateX(-50%); z-index:2; padding:12px 22px; font-size:15px;
     box-shadow:0 0 24px rgba(255,42,90,.5); animation:pulse 1s steps(2) infinite}
   @keyframes pulse{50%{filter:brightness(1.35)}}
@@ -191,7 +205,8 @@
   .wiki-body a:active{background:rgba(45,226,230,.2)}
   .wiki-msg{color:var(--dim); font:22px var(--term); padding:30px 0; text-align:center}
   /* lobby match settings */
-  .opts{display:flex; flex-direction:column; gap:6px}
+  .opts{display:grid; grid-template-columns:1fr 1fr; gap:6px}
+  .opt.wide{grid-column:1 / -1}
   .opt{display:flex; justify-content:space-between; align-items:center; gap:10px; padding:10px 12px; clip-path:none;
     background:var(--panel); color:var(--ink); box-shadow:inset 0 0 0 1px var(--edge); font-size:11px}
   .opt b{font-weight:700; color:var(--cyan)}
@@ -261,6 +276,7 @@
     <div class="row">
       <input id="code" maxlength="4" autocomplete="off" autocapitalize="characters" placeholder="CODE" aria-label="Room code">
       <button id="joinBtn" class="ghost" style="flex:0 0 auto">Join</button>
+      <button id="tvBtn" class="ghost" style="flex:0 0 auto" title="Show the game on this screen without playing">TV</button>
     </div>
     <div class="games" id="games"></div>
     <p class="note" id="netNote" hidden>Online play isn't available here right now. Practice against bots still works.</p>
@@ -327,6 +343,8 @@
     <div class="over" id="over" hidden>
       <h2 id="overTitle"></h2>
       <p id="overSub"></p>
+      <div class="awards" id="awards"></div>
+      <button id="shareBtn" class="ghost" type="button">Share result</button>
       <div class="row" id="overHost">
         <button id="rematchBtn">Rematch</button>
         <button id="toLobbyBtn" class="ghost">Lobby</button>
@@ -403,11 +421,14 @@ const T = {
   AIM_TIME: 4,            // seconds to tap a target after entering the secret
   SECRET_TIME: 3,         // seconds for a secret: 2 taps above the field + 2 below = finisher, 3 + 3 = domain
   DOMAIN_TIME: 4.6,       // domain expansion cinematic length (the match pauses for it)
+  STOP_TIME: 3.4,         // Frozen Hour (4 taps above, 1 below): everyone else frozen this long; bombs keep ticking
+  LANCE_WIND: 1.2, LANCE_FIRE: 0.5,   // Void Lance (5 above, 1 below): wind-up you can dodge, then a 3-wide beam across the map
   QTE_TIME: 0.5,          // the victim's window to hit JUMP! (the cinematic keeps rolling meanwhile)
   DODGE_TIME: 5,          // then this long to make DODGE_GOAL in a mini 2048 from a normal start
   DODGE_GOAL: 32,
   QTE_GRACE: 0.8,         // extra host-side wait for the 2048 result to arrive over the network
   WINS: 3, COUNTDOWN: 3, ROUND_PAUSE: 3.2,
+  KILLCAM: 4.4,           // extra round pause when the round-ending kill gets a slow-motion replay
   BOT_THINK: 0.14,
   SWIPE_PX: 22, TAP_MS: 320,
   NET_HZ: 20, HOST_TIMEOUT: 15,   // seconds without the host before a phone gives up
@@ -420,6 +441,11 @@ const T = {
   RACE_MIN: 6,            // below this many seconds, respawns are off for the rest of the round
   RESPAWN_SHIELD: 2,      // seconds of invulnerability after respawning
   RESPAWN_DECIDE: 8,      // seconds a dead player has to tap Respawn before a lone survivor takes the round
+  KICK_SPEED: 9,          // tiles/sec a kicked bomb slides
+  GHOST_SPEED: 6, GHOST_CD: 3, GHOST_FLY: 0.45,   // ghosts: tiles/sec along the edge, seconds between throws, throw flight time
+  CONVEY: 0.35,           // seconds standing on a conveyor belt before it carries you a tile (bombs: double)
+  LASER: [4.4, 1.5, 0.7], // laser lane: seconds idle, warning, firing
+  SHIELD_INV: 1,          // seconds of invulnerability after a shield pops
 };
 let W = 11, H = 13, N = W * H;   // arena size: classic is 11x13 portrait; random maps change it each round
 const COLORS = ['#2de2e6', '#ff2a6d', '#fcee0a', '#7dff6a'];   // seat colors: rings, lights, HUD
@@ -449,11 +475,13 @@ const seatCustom = ['', '', '', ''];   // each seat's drawing, from the latest s
 // ---- Simulation (runs only on the host's phone, or locally in practice) ----
 let S = null;
 
-const OPTS_DEFAULT = {wiki: true, w1: true, map: 'classic'};
+// Match options (host's lobby). env: 'mix' = a different setting every round, or one setting's index.
+// pw extra power-ups, hz arena hazards, gh ghost revenge, tm 2v2 teams.
 function loadOpts(){
   let o = {}; try { o = JSON.parse(store.get('bl-opts') || '{}') || {}; } catch {}
-  const wt = Math.round(+o.wt);
-  return {wiki: o.wiki !== false, w1: o.w1 !== false, map: o.map === 'random' ? 'random' : 'classic', wt: wt >= 1 && wt <= 10 ? wt : 5};
+  const wt = Math.round(+o.wt), env = Number.isInteger(o.env) && o.env >= 0 && o.env < SETTINGS.length ? o.env : 'mix';
+  return {wiki: o.wiki !== false, w1: o.w1 !== false, map: o.map === 'random' ? 'random' : 'classic', wt: wt >= 1 && wt <= 10 ? wt : 5,
+    env, pw: o.pw !== false, hz: o.hz !== false, gh: o.gh !== false, tm: o.tm === true};
 }
 function lobbyState(seats){
   return {ph: 'lobby', seats, opts: loadOpts(), wins: [0, 0, 0, 0], acks: [0, 0, 0, 0], rd: 0, last: -1, champ: -1, boom: 0};
@@ -528,6 +556,8 @@ function mkPlayer(slot){
 function newMatch(){
   S.seats = S.seats.map(s => (s && !s.gone) ? s : null);
   S.wins = [0, 0, 0, 0]; S.rd = 0; S.champ = -1; S.ultUsed = [false, false, false, false]; S.domUsed = [false, false, false, false];
+  S.tsUsed = [false, false, false, false]; S.lnUsed = [false, false, false, false];
+  S.stats = [0, 1, 2, 3].map(() => ({k: 0, sk: 0, d: 0, ups: 0, bombs: 0, race: 0, comet: 0, gk: 0}));
   nextRound();
 }
 function nextRound(){
@@ -539,14 +569,112 @@ function nextRound(){
     a = makeArena(shape);
   }
   if (!a) { setDims(11, 13); a = makeArena('rect'); }
-  S.g = a.g; S.spawn = a.spawn; S.ring = a.ring; S.fl = new Float32Array(N); S.bombs = []; S.ups = [];
+  const env = S.opts.env;
+  S.en = env === 'mix' ? (S.rd === 1 ? (Math.random() * SETTINGS.length) | 0 : (S.en + 1 + ((Math.random() * (SETTINGS.length - 1)) | 0)) % SETTINGS.length) : env;
+  S.g = a.g; S.spawn = a.spawn; S.ring = a.ring; S.fl = new Float32Array(N); S.fo = new Int8Array(N).fill(-1); S.bombs = []; S.ups = [];
+  S.lastKill = null; S.kc = null;
+  S.hz = new Uint8Array(N); S.laser = null; S.gb = [];
+  if (S.opts.hz) addHazards();
   S.players = S.seats.map((s, i) => {
     if (!s) return null;
     const p = mkPlayer(i); if (s.gone) p.alive = false; return p;
   });
-  Object.assign(S, {time: T.ROUND_TIME, elapsed: 0, cd: T.COUNTDOWN, ph: 'count', last: -1, ult: null, dom: null,
+  Object.assign(S, {time: T.ROUND_TIME, elapsed: 0, cd: T.COUNTDOWN, ph: 'count', last: -1, ult: null, dom: null, ts: null, lance: null,
     ringNext: 2, shrinkAt: T.SHRINK_START, warn: null, shrinkDone: false,
     raceT: raceStart(S.opts.wt), raceDecayAt: T.RACE_DECAY_EVERY, decide: null});
+}
+// ---- Arena hazards (lobby toggle): two kinds per round, never on or next to a spawn.
+// Hazard codes per cell: 1-4 conveyor belt (u d l r), 5 ice, 6 teleporter pad (one pair), 8/9 laser lane (across/down).
+const HZ_DIR = ['', 'u', 'd', 'l', 'r'];
+function addHazards(){
+  const keep = new Set();
+  for (const [sx, sy] of S.spawn) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) keep.add((sy + dy) * W + sx + dx);
+  const open = i => i >= 0 && i < N && (S.g[i] === 0 || S.g[i] === 2) && !keep.has(i) && !S.hz[i];
+  const cells = []; for (let i = 0; i < N; i++) if (open(i)) cells.push(i);
+  if (cells.length < 20) return;
+  const kinds = shuffle(['belt', 'ice', 'tele', 'laser']).slice(0, 2);
+  // Straight runs of open cells along a row or column (rows and columns between pillars are the long ones).
+  const runs = vert => {
+    const out = [];
+    for (let a = 1; a < (vert ? W : H) - 1; a++) {
+      let run = [];
+      for (let c = 0; c <= (vert ? H : W); c++) {
+        const i = vert ? c * W + a : a * W + c, ok = c < (vert ? H : W) && open(i);
+        if (ok) run.push(i); else { if (run.length >= 4) out.push(run); run = []; }
+      }
+    }
+    return out;
+  };
+  for (const kind of kinds) {
+    if (kind === 'belt') for (let n = 0; n < 2; n++) {
+      const vert = Math.random() < .5, rs = runs(vert); if (!rs.length) break;
+      const r = pick(rs), len = Math.min(r.length, 4 + ((Math.random() * 4) | 0)), at = (Math.random() * (r.length - len + 1)) | 0;
+      const d = vert ? (Math.random() < .5 ? 1 : 2) : (Math.random() < .5 ? 3 : 4);
+      for (const i of r.slice(at, at + len)) S.hz[i] = d;
+    }
+    if (kind === 'ice') {
+      const q = [pick(cells.filter(open))], seen = new Set(q), size = 9 + ((Math.random() * 6) | 0);
+      for (let h = 0; h < q.length && seen.size < size; h++) for (const [dx, dy] of shuffle(Object.values(DIR))) {
+        const n = q[h] + dy * W + dx; if (!seen.has(n) && open(n) && seen.size < size) { seen.add(n); q.push(n); }
+      }
+      for (const i of seen) S.hz[i] = 5;
+    }
+    if (kind === 'tele') {
+      const free = cells.filter(open);
+      for (let k = 0; k < 40 && free.length > 1; k++) {
+        const a = pick(free), c = pick(free);
+        if (Math.abs(a % W - c % W) + Math.abs(((a / W) | 0) - ((c / W) | 0)) >= 6) { S.hz[a] = S.hz[c] = 6; S.g[a] = S.g[c] = 0; break; }
+      }
+    }
+    if (kind === 'laser') {
+      const vert = Math.random() < .5, rs = runs(vert).filter(r => {   // a full lane, wall to wall
+        const a = r[0], z = r[r.length - 1], st = vert ? W : 1;
+        return r.length >= 5 && S.g[a - st] === 1 && S.g[z + st] === 1;
+      });
+      if (!rs.length) continue;
+      const r = pick(rs);
+      for (const i of r) S.hz[i] = vert ? 9 : 8;
+      S.laser = {cells: r, t: -2 - Math.random() * 3};   // a few seconds' grace at the start
+    }
+  }
+}
+function laserPhase(){
+  if (!S.laser) return [0, 0];
+  const [a, w, f] = T.LASER, per = a + w + f, t = S.laser.t < 0 ? -1 : S.laser.t % per;
+  return t < 0 || t < a ? [0, 0] : t < a + w ? [1, (t - a) / w] : [2, (t - a - w) / f];
+}
+function tickHazards(dt){
+  if (S.laser) {
+    S.laser.t += dt;
+    if (laserPhase()[0] === 2) {
+      const lane = new Set(S.laser.cells);
+      for (const p of S.players) if (p && p.alive && !(p.inv > 0) && lane.has(cellOf(p))) kill(p, -1, 'laser');
+      for (const bm of S.bombs) if (lane.has(bm.y * W + bm.x)) bm.t = Math.min(bm.t, 0);   // the beam sets bombs off
+    }
+  }
+  for (const bm of S.bombs) {   // belts carry bombs too, a tile at a time
+    const d = HZ_DIR[S.hz[bm.y * W + bm.x]];
+    if (!d || bm.kick) { bm.cv = 0; continue; }
+    if ((bm.cv = (bm.cv || 0) + dt) >= T.CONVEY * 2) {
+      bm.cv = 0; const n = (bm.y + DIR[d][1]) * W + bm.x + DIR[d][0];
+      if (!slideBlocked(n)) { bm.kick = DIR[d]; bm.prog = 0; bm.one = true; }
+    }
+  }
+}
+// Called when a fighter finishes a step: ice keeps you sliding, pads send you to the other pad.
+function landOn(p){
+  const i = cellOf(p), h = S.hz[i];
+  if (h === 6 && p.tp !== i) {
+    let o = -1; for (let k = 0; k < N; k++) if (S.hz[k] === 6 && k !== i) o = k;
+    if (o >= 0 && canEnter(o) && !S.players.some(q => q && q !== p && q.alive && cellOf(q) === o)) {
+      p.x = p.tx = o % W; p.y = p.ty = (o / W) | 0; p.tp = o; pickUp(p); return;
+    }
+  }
+  if (h !== 6) p.tp = -1;
+  if (h === 5 && DIR[p.face]) {
+    const [dx, dy] = DIR[p.face];
+    if (canEnter(i + dy * W + dx)) p.q = [p.face];
+  }
 }
 // The next ring to close: the outermost one that still has open cells, as long as enough arena is left inside it.
 function nextRing(){
@@ -567,7 +695,7 @@ function closeRing(){
   S.ups = S.ups.filter(u => !shut.has(u.i));
   for (const p of S.players) {
     if (!p || !p.alive) continue;
-    if (shut.has(cellOf(p))) { p.alive = false; continue; }
+    if (shut.has(cellOf(p))) { kill(p, -1, 'ring'); continue; }
     if (p.moving && shut.has(p.ty * W + p.tx)) { p.tx -= Math.sign(p.tx - p.x); p.ty -= Math.sign(p.ty - p.y); }   // bounce back out of the closing wall
   }
   S.warn = null; S.ringNext++;
@@ -575,7 +703,8 @@ function closeRing(){
 }
 // Lobby slider "Wiki time" 1-10: 5 is RACE_TIME, each step is a fifth of it either way (1 = 8s, 10 = 80s).
 const raceStart = wt => T.RACE_TIME * (wt || 5) / 5;
-function liveCount(){ return S.players.filter(p => p && p.alive).length; }
+// Sides still fighting: players, or teams when Teams is on.
+function liveCount(){ return new Set(S.players.filter(p => p && p.alive).map(p => S.opts.tm ? p.slot & 1 : p.slot)).size; }
 // Whether this dead player may start a respawn race right now.
 function canRace(p, live){
   const seat = p && S.seats[p.slot];
@@ -589,20 +718,116 @@ const hard = v => v === 1 || v === 3;
 const bombAt = i => S.bombs.some(b => b.y * W + b.x === i);
 const canEnter = i => S.g[i] === 0 && !bombAt(i);
 
+// Teams (2v2): seats 0+2 against 1+3. Teammates can't hurt each other.
+const mates = (a, c) => !!(S.opts.tm && a !== c && a >= 0 && c >= 0 && (a & 1) === (c & 1));
+// Every death goes through here: shields, kill credit, match stats, and what the killcam replays.
+// cause: bomb, ring, comet, domain, laser, lance, time.
+function kill(p, by, cause){
+  if (!p || !p.alive) return false;
+  if (p.shield && (cause === 'bomb' || cause === 'laser' || cause === 'lance')) { p.shield = 0; p.inv = T.SHIELD_INV; return false; }
+  p.alive = false; p.q = []; p.moving = false; p.tx = Math.round(p.x); p.ty = Math.round(p.y);
+  const st = S.stats;
+  if (st) { st[p.slot].d++; if (by === p.slot) st[p.slot].sk++; else if (by >= 0 && st[by]) st[by].k++; }
+  S.lastKill = {v: p.slot, k: by, cause, at: S.elapsed};
+  onKill(p, by, cause);
+  return true;
+}
+function onKill(p, by, cause){ ghostOnKill(p, by, cause); }
+// ---- Ghost revenge (lobby toggle): the fallen haunt the arena's edge. Swipe to drift along it, tap to lob a bomb
+// in; a kill brings the ghost back to life. Ghosts live on the grid's outer ring, clockwise from the top-left.
+function perimeter(){
+  const out = [];
+  for (let x = 0; x < W; x++) out.push(x);
+  for (let y = 1; y < H; y++) out.push(y * W + W - 1);
+  for (let x = W - 2; x >= 0; x--) out.push((H - 1) * W + x);
+  for (let y = H - 2; y >= 1; y--) out.push(y * W);
+  return out;
+}
+const isCorner = c => (c % W === 0 || c % W === W - 1) && (c < W || c >= (H - 1) * W);
+const stepDir = (a, c) => { const dx = c % W - a % W, dy = ((c / W) | 0) - ((a / W) | 0); return dx > 0 ? 'r' : dx < 0 ? 'l' : dy > 0 ? 'd' : 'u'; };
+function ghostOnKill(p, by, cause){
+  const k = by >= 0 && by !== p.slot ? S.players[by] : null;
+  if (k && !k.alive && k.ghost && cause === 'bomb' && !k.racing) { respawn(k, true); if (S.stats) S.stats[k.slot].gk++; }   // revenge
+  const seat = S.seats[p.slot];
+  if (!S.opts.gh || S.ph !== 'play' || !seat || seat.gone || cause === 'time') return;
+  const per = perimeter(); let best = 0, bd = 1e9;
+  per.forEach((c, j) => { const d = Math.abs(c % W - p.x) + Math.abs(((c / W) | 0) - p.y); if (d < bd) { bd = d; best = j; } });
+  p.ghost = {pos: best, v: 0, cd: 1.5};
+}
+function ghostAct(p, a){
+  const g = p.ghost, per = perimeter(), L = per.length, i = Math.round(g.pos) % L, c = per[i];
+  if (DIR[a]) {   // glide along the edge until the next corner; a swipe the other way turns back, inward stops
+    if (stepDir(c, per[(i + 1) % L]) === a) { g.v = 1; if (isCorner(c)) g.pos = i; }
+    else if (stepDir(c, per[(i - 1 + L) % L]) === a) { g.v = -1; if (isCorner(c)) g.pos = i; }
+    else g.v = 0;
+  } else if (a === 'b') ghostThrow(p);
+}
+function ghostThrow(p){
+  const g = p.ghost;
+  if (g.cd > 0 || S.gb.some(f => f.owner === p.slot)) return;
+  const per = perimeter(), c = per[Math.round(g.pos) % per.length], x = c % W, y = (c / W) | 0;
+  const [dx, dy] = y === 0 ? [0, 1] : y === H - 1 ? [0, -1] : x === 0 ? [1, 0] : [-1, 0];
+  const sx = dx ? x : Math.min(W - 2, Math.max(1, x)), sy = dy ? y : Math.min(H - 2, Math.max(1, y));
+  for (const k of [3, 2, 4, 1].concat(Array.from({length: Math.max(W, H)}, (_, n) => n + 5))) {   // ~3 tiles in, else wherever it can land
+    const tx = sx + dx * k, ty = sy + dy * k, i = ty * W + tx;
+    if (tx < 0 || ty < 0 || tx >= W || ty >= H || !canEnter(i)) continue;
+    S.gb.push({from: c, to: i, t: T.GHOST_FLY, owner: p.slot}); g.cd = T.GHOST_CD; g.v = 0;
+    if (S.stats) S.stats[p.slot].bombs++;
+    return;
+  }
+}
+function ghostBot(p, g, per){   // bots haunt too: drift toward the nearest enemy and lob when lined up
+  if ((g.think = (g.think || 0) - STEP) > 0) return;
+  g.think = .4 + Math.random() * .3;
+  const foes = S.players.filter(o => o && o.alive && !mates(o.slot, p.slot));
+  if (!foes.length) return;
+  const L = per.length, o = foes[0];
+  let best = 0, bd = 1e9;
+  per.forEach((c, j) => { const d = Math.abs(c % W - o.x) + Math.abs(((c / W) | 0) - o.y); if (d < bd) { bd = d; best = j; } });
+  let diff = (best - Math.round(g.pos) + L) % L; if (diff > L / 2) diff -= L;
+  if (Math.abs(diff) <= 1) { g.v = 0; if (g.cd <= 0 && Math.random() < .7) ghostThrow(p); }
+  else g.v = Math.sign(diff);
+}
+function tickGhosts(dt){
+  const per = perimeter(), L = per.length;
+  for (const p of S.players) {
+    const g = p && !p.alive && p.ghost; if (!g || p.racing) continue;
+    g.cd -= dt;
+    if (S.seats[p.slot] && S.seats[p.slot].kind === 'b') ghostBot(p, g, per);
+    if (!g.v) continue;
+    const before = Math.round(g.pos) % L;
+    g.pos = (g.pos + g.v * T.GHOST_SPEED * dt + L) % L;
+    const at = Math.round(g.pos) % L;
+    if (at !== before && isCorner(per[at])) { g.pos = at; g.v = 0; }
+  }
+  for (const f of S.gb) if ((f.t -= dt) <= 0) {
+    f.done = true;
+    if (canEnter(f.to)) S.bombs.push({x: f.to % W, y: (f.to / W) | 0, t: T.FUSE, owner: f.owner, range: 2});
+  }
+  S.gb = S.gb.filter(f => !f.done);
+}
 function doAct(slot, a){
   const p = S.players && S.players[slot];
   if (!p || S.ph !== 'play') return;
-  if (a === 'w') { if (canRace(p, liveCount())) { p.racing = true; p.raceLeft = S.raceT; } return; }   // started a respawn wikirace
+  if (a === 'w') { if (canRace(p, liveCount())) { p.racing = true; p.raceLeft = p.raceFrom = S.raceT; } return; }   // started a respawn wikirace
   if (a === 'q') { if (p.racing) { p.racing = false; p.failed = true; } return; }                       // gave up on it
-  if (a === 'x') { if (!p.alive && p.racing) respawn(p); return; }         // finished it
+  if (a === 'x') {   // finished it
+    if (!p.alive && p.racing) { if (S.stats) S.stats[slot].race = Math.max(S.stats[slot].race, p.raceFrom - p.raceLeft); respawn(p); }
+    return;
+  }
   const u = S.ult;
   if (u && u.v === slot) {   // the finisher's victim answering: J = hit JUMP!, K = made 128, F = didn't
     if (a === 'J' && u.stage !== 2 && !u.jumped && u.t < 1) { u.jumped = true; u.t = Math.min(u.t, .85); u.stage = 2; u.wait = T.DODGE_TIME + T.QTE_GRACE; }
     else if ((a === 'K' || a === 'F') && u.stage === 2) { u.dodged = a === 'K'; u.stage = 3; }
     return;
   }
-  if (u || S.dom || !p.alive) return;
-  if (a === 'D') { tryDomain(p); return; }   // secret domain expansion from that player's phone
+  if (S.ts && S.ts.a !== slot) return;   // frozen in someone's Frozen Hour
+  if (!p.alive) { if (p.ghost && !p.racing && !u && !S.dom) ghostAct(p, a); return; }
+  if (u || S.dom) return;
+  if (S.lance && S.lance.a === slot) return;   // channeling the lance
+  if (a === 'D') { tryDomain(p); return; }
+  if (a === 'T') { tryStop(p); return; }
+  if (a === 'V') { tryLance(p); return; }   // secret domain expansion from that player's phone
   const ti = 'ghij'.indexOf(a);
   if (ti >= 0) { tryUlt(p, ti); return; }   // secret finisher aimed at seat ti from that player's phone
   if (a === 'b') dropBomb(p);
@@ -612,15 +837,53 @@ function doAct(slot, a){
 // match freezes for a cinematic. The victim gets a JUMP! prompt; hit it and make DODGE_GOAL in a mini 2048 to dodge.
 // Domain expansion (3 taps above the field, then 3 below): once per match, freezes the match for a cinematic and
 // cuts down every other fighter still standing.
+const busySecret = () => S.ult || S.dom || S.ts || S.lance;
+function tryStop(p){
+  if (!S.tsUsed || S.tsUsed[p.slot] || busySecret()) return;
+  S.tsUsed[p.slot] = true; S.ts = {a: p.slot, t: 0};
+  for (const o of S.players) if (o && o !== p) o.q = [];
+}
+// Void Lance aims itself down whichever row or column has the most enemies in the 3-wide band ahead.
+function lanceBand(x0, y0, d){
+  const [dx, dy] = DIR[d], out = [];
+  for (let k = 1; k < Math.max(W, H); k++) for (const o of [-1, 0, 1]) {
+    const x = x0 + dx * k + (dy ? o : 0), y = y0 + dy * k + (dx ? o : 0);
+    if (x >= 0 && y >= 0 && x < W && y < H) out.push(y * W + x);
+  }
+  return out;
+}
+function tryLance(p){
+  if (!S.lnUsed || S.lnUsed[p.slot] || busySecret()) return;
+  const x0 = Math.round(p.x), y0 = Math.round(p.y), foes = S.players.filter(o => o && o.alive && o !== p && !mates(o.slot, p.slot));
+  let best = p.face, bn = -1, bd = 1e9;
+  for (const d of 'udlr') {
+    const band = new Set(lanceBand(x0, y0, d)), hit = foes.filter(o => band.has(cellOf(o)));
+    const near = Math.min(1e9, ...hit.map(o => Math.abs(o.x - x0) + Math.abs(o.y - y0)));
+    if (hit.length > bn || (hit.length === bn && near < bd)) { bn = hit.length; bd = near; best = d; }
+  }
+  S.lnUsed[p.slot] = true; p.q = [];
+  S.lance = {a: p.slot, d: best, t: 0, x0, y0, cells: lanceBand(x0, y0, best)};
+}
+function tickLance(dt){
+  const L = S.lance; if (!L) return;
+  const was = L.t; L.t += dt;
+  if (L.t >= T.LANCE_WIND) {
+    const band = new Set(L.cells);
+    if (was < T.LANCE_WIND) for (const i of L.cells) { if (S.g[i] === 2) S.g[i] = 0; }   // crates vaporize
+    for (const bm of S.bombs) if (band.has(bm.y * W + bm.x)) bm.t = Math.min(bm.t, 0);
+    for (const o of S.players) if (o && o.alive && o.slot !== L.a && !(o.inv > 0) && !mates(o.slot, L.a) && band.has(cellOf(o))) kill(o, L.a, 'lance');
+  }
+  if (L.t >= T.LANCE_WIND + T.LANCE_FIRE) S.lance = null;
+}
 function tryDomain(p){
-  if (!S.domUsed || S.domUsed[p.slot] || S.ult || S.dom) return;
+  if (!S.domUsed || S.domUsed[p.slot] || busySecret()) return;
   S.domUsed[p.slot] = true;
   for (const o of S.players) if (o) o.q = [];
   S.dom = {a: p.slot, t: 0};
 }
 function tryUlt(p, vi){
   const best = S.players[vi];
-  if (!S.ultUsed || S.ultUsed[p.slot] || !best || best === p || !best.alive || best.inv > 0) return false;
+  if (!S.ultUsed || S.ultUsed[p.slot] || !best || best === p || !best.alive || best.inv > 0 || mates(p.slot, vi) || S.ts || S.lance) return false;
   if (Math.max(Math.abs(Math.round(best.x) - Math.round(p.x)), Math.abs(Math.round(best.y) - Math.round(p.y))) > T.ULT_REACH) return false;
   S.ultUsed[p.slot] = true;
   for (const o of S.players) if (o) o.q = [];
@@ -629,10 +892,43 @@ function tryUlt(p, vi){
 }
 function dropBomb(p){
   const i = cellOf(p);
-  if (S.g[i] !== 0 || bombAt(i)) return false;
+  if (S.g[i] !== 0) return false;
+  if (bombAt(i)) return p.line ? lineBomb(p) : false;   // line bomb: tap again on your own bomb to lay the rest in a row
   if (S.bombs.filter(b => b.owner === p.slot).length >= p.bombs) return false;
-  S.bombs.push({x: i % W, y: (i / W) | 0, t: T.FUSE, owner: p.slot, range: p.range});
+  S.bombs.push({x: i % W, y: (i / W) | 0, t: T.FUSE, owner: p.slot, range: p.range, pierce: !!p.pierce});
+  if (S.stats) S.stats[p.slot].bombs++;
   return true;
+}
+function lineBomb(p){
+  const [dx, dy] = DIR[p.face] || DIR.d, x0 = Math.round(p.x), y0 = Math.round(p.y);
+  let n = 0;
+  for (let k = 1; S.bombs.filter(b => b.owner === p.slot).length < p.bombs; k++) {
+    const x = x0 + dx * k, y = y0 + dy * k, i = y * W + x;
+    if (x < 0 || y < 0 || x >= W || y >= H || !canEnter(i) || S.players.some(o => o && o.alive && cellOf(o) === i)) break;
+    S.bombs.push({x, y, t: T.FUSE + k * .05, owner: p.slot, range: p.range, pierce: !!p.pierce}); n++;
+  }
+  if (S.stats) S.stats[p.slot].bombs += n;
+  return n > 0;
+}
+// Kick: walking into a bomb sends it sliding until something stops it.
+function kickBomb(p, i, d){
+  const bm = S.bombs.find(o => o.y * W + o.x === i); if (!bm || bm.kick) return;
+  const [dx, dy] = DIR[d], n = i + dy * W + dx;
+  if (slideBlocked(n)) return;
+  bm.kick = [dx, dy]; bm.prog = 0;
+}
+const slideBlocked = n => S.g[n] !== 0 || bombAt(n) || S.players.some(o => o && o.alive && (cellOf(o) === n || o.ty * W + o.tx === n));
+function slideBombs(dt){
+  for (const bm of S.bombs) {
+    if (!bm.kick) continue;
+    bm.prog += dt * T.KICK_SPEED;
+    while (bm.kick && bm.prog >= 1) {
+      bm.prog -= 1; bm.x += bm.kick[0]; bm.y += bm.kick[1];
+      if (bm.one) { bm.kick = null; bm.prog = 0; bm.one = false; break; }
+      if (slideBlocked((bm.y + bm.kick[1]) * W + bm.x + bm.kick[0])) { bm.kick = null; bm.prog = 0; }
+    }
+    if (bm.kick && slideBlocked((bm.y + bm.kick[1]) * W + bm.x + bm.kick[0])) { bm.kick = null; bm.prog = 0; }
+  }
 }
 // One swipe = one tile. Leftover movement carries into the next queued step so chains feel continuous.
 function stepPlayer(p, dt){
@@ -642,33 +938,40 @@ function stepPlayer(p, dt){
       if (!p.q.length) return;
       const d = p.q.shift(); p.face = d;
       const [dx, dy] = DIR[d], nx = p.x + dx, ny = p.y + dy;
-      if (!canEnter(ny * W + nx)) continue;
+      if (!canEnter(ny * W + nx)) { if (p.kick && S.g[ny * W + nx] === 0) kickBomb(p, ny * W + nx, d); continue; }
       p.tx = nx; p.ty = ny; p.moving = true;
     }
     const dist = Math.abs(p.tx - p.x) + Math.abs(p.ty - p.y), m = Math.min(rem, dist);
     p.x += Math.sign(p.tx - p.x) * m; p.y += Math.sign(p.ty - p.y) * m; rem -= m;
-    if (m >= dist - 1e-9) { p.x = p.tx; p.y = p.ty; p.moving = false; pickUp(p); }
+    if (m >= dist - 1e-9) { p.x = p.tx; p.y = p.ty; p.moving = false; pickUp(p); landOn(p); }
   }
 }
-function respawn(p){
+function respawn(p, free){   // free: a ghost's comeback, which doesn't shorten everyone's wikirace clock
   const dz = dangerMap(), open = i => S.g[i] === 0 && !bombAt(i);
   const cells = [];
   for (let i = 0; i < N; i++) if (open(i) && !dz[i] && !enemyNear(p, i, 2) && Object.values(DIR).some(([dx, dy]) => open(i + dy * W + dx))) cells.push(i);
   const i = cells.length ? cells[(Math.random() * cells.length) | 0] : S.spawn[p.slot][1] * W + S.spawn[p.slot][0];
   const x = i % W, y = (i / W) | 0;
   Object.assign(p, {x, y, tx: x, ty: y, moving: false, q: [], alive: true, racing: false, failed: false, inv: T.RESPAWN_SHIELD,
-    bombs: T.START_BOMBS, range: T.START_RANGE, speed: T.SPEED});
-  S.raceT *= T.RESPAWN_DECAY; S.decide = null;
+    bombs: T.START_BOMBS, range: T.START_RANGE, speed: T.SPEED, kick: false, pierce: false, line: false, shield: 0, ghost: null});
+  if (!free) S.raceT *= T.RESPAWN_DECAY;
+  S.decide = null;
 }
 function pickUp(p){
   const i = cellOf(p), k = S.ups.findIndex(u => u.i === i);
   if (k < 0) return;
   const u = S.ups.splice(k, 1)[0];
+  if (S.stats) S.stats[p.slot].ups++;
   if (u.t === 0) p.bombs = Math.min(T.MAX_BOMBS, p.bombs + 1);
   else if (u.t === 1) p.range = Math.min(T.MAX_RANGE, p.range + 1);
-  else p.speed = Math.min(T.MAX_SPEED, p.speed + T.SPEED_UP);
+  else if (u.t === 2) p.speed = Math.min(T.MAX_SPEED, p.speed + T.SPEED_UP);
+  else if (u.t === 3) p.kick = true;
+  else if (u.t === 4) p.pierce = true;
+  else if (u.t === 5) p.line = true;
+  else p.shield = 1;
 }
 function tickBombs(dt){
+  slideBombs(dt);
   for (const b of S.bombs) b.t -= dt;
   let again = true;
   while (again) { again = false; for (const b of S.bombs) if (b.t <= 0 && !b.done) { b.done = true; again = true; explode(b); } }
@@ -677,23 +980,26 @@ function tickBombs(dt){
 function explode(b){
   S.boom++;
   const hit = [b.y * W + b.x];
+  b.kick = null;
   for (const [dx, dy] of Object.values(DIR)) {
     for (let r = 1; r <= b.range; r++) {
       const x = b.x + dx * r, y = b.y + dy * r, i = y * W + x;
       if (hard(S.g[i])) break;
       hit.push(i);
-      if (S.g[i] === 2) { S.g[i] = 0; maybeDrop(i); break; }        // revealed power-up survives this blast
+      if (S.g[i] === 2) { S.g[i] = 0; maybeDrop(i); if (b.pierce) continue; break; }   // revealed power-up survives this blast; pierce bombs keep going
       const k = S.ups.findIndex(u => u.i === i); if (k >= 0) S.ups.splice(k, 1);
       const chain = S.bombs.find(o => !o.done && o.x === x && o.y === y);
       if (chain) { chain.t = 0; break; }
     }
   }
-  for (const i of hit) S.fl[i] = T.FLAME;
+  for (const i of hit) { S.fl[i] = T.FLAME; S.fo[i] = b.owner; }
 }
+// Power-ups: 0 bomb, 1 range, 2 speed; with Power-ups+ on also 3 kick, 4 pierce, 5 line bomb, 6 shield.
 function maybeDrop(i){
   if (Math.random() >= T.DROP) return;
   const r = Math.random();
-  S.ups.push({i, t: r < 0.38 ? 0 : r < 0.72 ? 1 : 2});
+  if (!S.opts.pw) return S.ups.push({i, t: r < 0.38 ? 0 : r < 0.72 ? 1 : 2});
+  S.ups.push({i, t: r < .29 ? 0 : r < .54 ? 1 : r < .68 ? 2 : r < .77 ? 3 : r < .85 ? 4 : r < .92 ? 5 : 6});
 }
 function update(dt){
   if (!S || S.ph === 'lobby' || S.ph === 'match') return;
@@ -702,7 +1008,7 @@ function update(dt){
   if (S.ph === 'round') { S.pause -= dt; if (S.pause <= 0) { if (S.champ >= 0) S.ph = 'match'; else nextRound(); } return; }
   if (S.dom) {   // everything holds still for the domain, then everyone else falls
     if ((S.dom.t += dt) >= T.DOMAIN_TIME) {
-      for (const o of S.players) if (o && o.slot !== S.dom.a && o.alive) o.alive = false;
+      for (const o of S.players) if (o && o.slot !== S.dom.a && o.alive && !mates(o.slot, S.dom.a)) kill(o, S.dom.a, 'domain');
       S.dom = null;
     }
     return;
@@ -713,44 +1019,78 @@ function update(dt){
     else {
       u.t += dt;
       if (u.stage === 0 && u.t >= .85) u.stage = 3;   // no JUMP! in time: the car comes on schedule
-      if (u.t >= T.ULT_TIME) { const v = S.players[u.v]; if (v && !u.dodged) v.alive = false; S.ult = null; }
+      if (u.t >= T.ULT_TIME) { const v = S.players[u.v]; if (v && !u.dodged) { if (kill(v, u.a, 'comet') && S.stats) S.stats[v.slot].comet++; } S.ult = null; }
     }
     return;
   }
-  S.time -= dt; S.elapsed += dt;
-  // Long rounds: the arena closes in one ring at a time (each ring flashes first), faster once the clock is out.
-  if (S.time <= 0 && S.shrinkAt > S.elapsed + T.SHRINK_WARN) S.shrinkAt = S.elapsed + T.SHRINK_WARN;
-  if (!S.shrinkDone && !S.warn && S.elapsed >= S.shrinkAt - T.SHRINK_WARN) { S.warn = nextRing(); if (!S.warn) S.shrinkDone = true; }
-  if (S.warn && S.elapsed >= S.shrinkAt) closeRing();
-  if (S.time < -120) for (const p of S.players) if (p) p.alive = false;   // overtime cap: call it a draw
-  // Wikirace time shrinks as the round goes on; racers who run out stay dead until a later round.
-  if ((S.raceDecayAt -= dt) <= 0) { S.raceDecayAt += T.RACE_DECAY_EVERY; S.raceT *= T.RACE_DECAY; }
-  for (const p of S.players) if (p && p.racing && (p.raceLeft -= dt) <= 0) { p.racing = false; p.failed = true; }
-  tickBombs(dt);
-  for (const p of S.players) if (p && p.alive) {
-    if (S.seats[p.slot] && S.seats[p.slot].kind === 'b') botThink(p, dt);
-    stepPlayer(p, dt);
-    if (p.inv > 0) p.inv -= dt;
+  if (S.ts && (S.ts.t += dt) >= T.STOP_TIME) S.ts = null;
+  const stopped = !!S.ts;   // Frozen Hour: the clock, the ring, hazards and everyone but the caster hold still; bombs don't
+  if (!stopped) {
+    S.time -= dt; S.elapsed += dt;
+    // Long rounds: the arena closes in one ring at a time (each ring flashes first), faster once the clock is out.
+    if (S.time <= 0 && S.shrinkAt > S.elapsed + T.SHRINK_WARN) S.shrinkAt = S.elapsed + T.SHRINK_WARN;
+    if (!S.shrinkDone && !S.warn && S.elapsed >= S.shrinkAt - T.SHRINK_WARN) { S.warn = nextRing(); if (!S.warn) S.shrinkDone = true; }
+    if (S.warn && S.elapsed >= S.shrinkAt) closeRing();
+    if (S.time < -120) for (const p of S.players) if (p && p.alive) kill(p, -1, 'time');   // overtime cap: call it a draw
+    // Wikirace time shrinks as the round goes on; racers who run out stay dead until a later round.
+    if ((S.raceDecayAt -= dt) <= 0) { S.raceDecayAt += T.RACE_DECAY_EVERY; S.raceT *= T.RACE_DECAY; }
   }
-  for (const p of S.players) if (p && p.alive && !(p.inv > 0) && S.fl[cellOf(p)] > 0) p.alive = false;
-  const live = S.players.filter(p => p && p.alive);
-  if (live.length >= 2) S.decide = null;   // a failed or abandoned race is final for that life
+  for (const p of S.players) if (p && p.racing && (p.raceLeft -= dt) <= 0) { p.racing = false; p.failed = true; }
+  tickBombs(dt); tickLance(dt);
+  if (!stopped) { tickHazards(dt); tickGhosts(dt); }
+  for (const p of S.players) if (p && p.alive) {
+    if (p.inv > 0 && stopped) p.inv -= dt;
+    if ((stopped && p.slot !== S.ts.a) || (S.lance && S.lance.a === p.slot)) continue;
+    if (S.seats[p.slot] && S.seats[p.slot].kind === 'b') botThink(p, dt);
+    const belt = HZ_DIR[S.hz[cellOf(p)]];   // standing still on a belt: it carries you
+    if (belt && !p.moving && !p.q.length) { if ((p.cv = (p.cv || 0) + dt) >= T.CONVEY) { p.cv = 0; p.q.push(belt); } } else p.cv = 0;
+    stepPlayer(p, dt);
+    if (p.inv > 0 && !stopped) p.inv -= dt;
+  }
+  for (const p of S.players) {
+    if (!p || !p.alive || p.inv > 0) continue;
+    const i = cellOf(p);
+    if (S.fl[i] > 0 && !(S.fo[i] >= 0 && S.fo[i] !== p.slot && mates(S.fo[i], p.slot))) kill(p, S.fo[i], 'bomb');   // no friendly fire in teams
+  }
+  const live = S.players.filter(p => p && p.alive), sides = liveCount();
+  if (sides >= 2) S.decide = null;   // a failed or abandoned race is final for that life
   else {
     // "Wiki in 1v1": with one survivor left, wait for anyone racing back in, and give the fallen a few
     // seconds to start a race (otherwise a 1v1 would end the instant someone dies).
     if (S.opts.w1 && S.players.some(p => p && p.racing)) return;
-    if (S.opts.w1 && S.time > -120 && S.players.some(p => canRace(p, live.length))) {
+    if (S.opts.w1 && S.time > -120 && S.players.some(p => canRace(p, sides))) {
       if (S.decide == null) S.decide = T.RESPAWN_DECIDE;
       if ((S.decide -= dt) > 0) return;
     }
     S.decide = null;
-    for (const p of S.players) if (p) p.racing = false;
+    for (const p of S.players) if (p) { p.racing = false; p.ghost = null; }
     S.last = live.length ? live[0].slot : -1;
-    if (S.last >= 0 && ++S.wins[S.last] >= T.WINS) S.champ = S.last;
-    S.ph = 'round'; S.pause = T.ROUND_PAUSE;
+    if (S.last >= 0) {   // with teams, both teammates score
+      for (let i = 0; i < 4; i++) if (S.seats[i] && (i === S.last || mates(i, S.last))) S.wins[i]++;
+      if (S.wins[S.last] >= T.WINS) S.champ = S.last;
+    }
+    // Killcam: replay the kill that ended the round (not the ones with their own cinematic)
+    const lk = S.lastKill, cause = lk ? ['bomb', 'ring', 'laser', 'lance'].indexOf(lk.cause) : -1;
+    S.kc = cause >= 0 && S.elapsed - lk.at < 9 ? [lk.v, lk.k, cause] : null;
+    S.ph = 'round'; S.pause = T.ROUND_PAUSE + (S.kc ? T.KILLCAM : 0);
+    if (S.champ >= 0) S.awards = awards();
   }
 }
 
+// End-of-match awards from the match stats: [title, seat, detail], the most remarkable first.
+function awards(){
+  const st = S.stats, seats = [0, 1, 2, 3].filter(i => S.seats[i] && st && st[i]), out = [], used = new Set();
+  const top = (key, min) => { let b = -1; for (const i of seats) if (st[i][key] >= min && (b < 0 || st[i][key] > st[b][key])) b = i; return b; };
+  const add = (title, key, min, fmt) => { const i = top(key, min); if (i >= 0 && !used.has(title)) { used.add(title); out.push([title, i, fmt(st[i][key])]); } };
+  add('Most kills', 'k', 1, n => n + (n === 1 ? ' kill' : ' kills'));
+  add('Own worst enemy', 'sk', 1, n => n + ' self-kill' + (n === 1 ? '' : 's'));
+  add('Ghost hunter', 'gk', 1, n => n + ' kill' + (n === 1 ? '' : 's') + ' as a ghost');
+  add('Longest wikirace', 'race', 1, n => Math.round(n) + 's to get back');
+  add('Comet victim', 'comet', 1, n => 'hit ' + n + 'x');
+  add('Bomb spammer', 'bombs', 5, n => n + ' bombs');
+  add('Collector', 'ups', 2, n => n + ' power-ups');
+  return out.slice(0, 5);
+}
 // ---- Bots ---------------------------------------------------------------------
 function dangerMap(extra){
   const d = new Uint8Array(N);
@@ -758,11 +1098,13 @@ function dangerMap(extra){
     d[b.y * W + b.x] = 1;
     for (const [dx, dy] of Object.values(DIR)) for (let r = 1; r <= b.range; r++) {
       const i = (b.y + dy * r) * W + b.x + dx * r;
-      if (hard(S.g[i])) break; d[i] = 1; if (S.g[i] === 2) break;
+      if (hard(S.g[i])) break; d[i] = 1; if (S.g[i] === 2 && !b.pierce) break;
     }
   }
   for (let i = 0; i < N; i++) if (S.fl[i] > 0) d[i] = 1;
   if (S.warn) for (const i of S.warn) d[i] = 1;   // a ring about to close
+  if (S.lance) for (const i of S.lance.cells) d[i] = 1;
+  if (S.laser && (laserPhase()[0] || (S.laser.t % T.LASER.reduce((a, c) => a + c)) > T.LASER[0] - 1)) for (const i of S.laser.cells) d[i] = 1;
   return d;
 }
 // Breadth-first search; returns the first direction toward the nearest cell where goal(i) holds.
@@ -782,13 +1124,13 @@ function firstStep(from, goal, pass){
 }
 function enemyNear(p, i, reach){
   const x = i % W, y = (i / W) | 0;
-  return S.players.some(o => o && o.alive && o !== p && Math.abs(Math.round(o.x) - x) + Math.abs(Math.round(o.y) - y) <= reach);
+  return S.players.some(o => o && o.alive && o !== p && !mates(o.slot, p.slot) && Math.abs(Math.round(o.x) - x) + Math.abs(Math.round(o.y) - y) <= reach);
 }
 function wantsBomb(p, i){
   for (const [dx, dy] of Object.values(DIR)) if (S.g[i + dy * W + dx] === 2) return true;
   const x = i % W, y = (i / W) | 0;
   for (const o of S.players) {
-    if (!o || !o.alive || o === p) continue;
+    if (!o || !o.alive || o === p || mates(o.slot, p.slot)) continue;
     const ox = Math.round(o.x), oy = Math.round(o.y);
     if ((ox === x && Math.abs(oy - y) <= p.range) || (oy === y && Math.abs(ox - x) <= p.range)) {
       const [sx, sy] = [Math.sign(ox - x), Math.sign(oy - y)]; let clear = true;
@@ -820,22 +1162,31 @@ function botThink(p, dt){
 // ---- Snapshot: the one format both the host screen and remote phones draw from --
 function encode(){
   const s = {ph: S.ph, rd: S.rd, w: S.wins, k: S.acks, last: S.last, champ: S.champ,
-    o: [S.opts.wiki ? 1 : 0, S.opts.w1 ? 1 : 0, S.opts.map === 'random' ? 1 : 0, S.opts.wt || 5],
+    o: [S.opts.wiki ? 1 : 0, S.opts.w1 ? 1 : 0, S.opts.map === 'random' ? 1 : 0, S.opts.wt || 5, S.opts.env === 'mix' ? -1 : S.opts.env,
+      S.opts.pw ? 1 : 0, S.opts.hz ? 1 : 0, S.opts.gh ? 1 : 0, S.opts.tm ? 1 : 0],
     seat: S.seats.map(x => x ? [x.name, x.kind, x.peer || 0, x.gone ? 1 : 0, x.ch | 0, x.ch === CUSTOM ? x.cu : 0] : 0)};
-  if (S.ph === 'lobby') return s;
+  if (S.ph === 'lobby') { if (S.tv) s.tv = S.tv; return s; }
+  if (S.ph === 'round' && S.kc) s.kc = S.kc;
+  if (S.ph === 'match' && S.awards) s.aw = S.awards;
   const live = liveCount();
-  s.dm = [W, H]; s.g = S.g.join('');
+  s.dm = [W, H]; s.g = S.g.join(''); s.en = S.en; s.hz = S.hz.some(Boolean) ? S.hz.join('') : '';
+  if (S.laser) { const [lp, lk] = laserPhase(); s.lz = [lp, Math.round(lk * 100)]; }
   s.rt = Math.ceil(S.raceT * 10);
   if (S.warn) s.wc = S.warn;
   if (S.dom) s.dx = [S.dom.a, Math.round(S.dom.t * 100)];
   if (S.ult) s.ul = [S.ult.a, S.ult.v, Math.round(S.ult.t * 100), S.ult.stage, S.ult.dodged ? 1 : 0];
+  if (S.ts) s.ts = [S.ts.a, Math.round(S.ts.t * 100)];
+  if (S.lance) s.ln = [S.lance.a, S.lance.d, Math.round(S.lance.t * 100), S.lance.x0, S.lance.y0];
   if (S.ringNext > 2 || S.warn) s.sk = 1;
   if (live <= 1 && S.decide != null && !S.players.some(p => p && p.racing)) s.hd = Math.ceil(S.decide * 10);
   s.tm = Math.ceil(S.time * 10); s.cd = Math.ceil(S.cd * 10); s.bx = S.boom;
   // flags: 1 racing, 2 may start a race, 4 spawn shield. Last field: race seconds left (tenths).
   s.p = S.players.map(p => p ? [Math.round(p.x * 100), Math.round(p.y * 100), p.alive ? 1 : 0, p.bombs, p.range, p.face,
-    (p.racing ? 1 : 0) | (canRace(p, live) ? 2 : 0) | (p.inv > 0 ? 4 : 0), p.racing ? Math.ceil(p.raceLeft * 10) : 0, Math.round(p.speed * 10)] : 0);
-  s.b = S.bombs.map(b => [b.x, b.y, Math.round(b.t * 100)]);
+    (p.racing ? 1 : 0) | (canRace(p, live) ? 2 : 0) | (p.inv > 0 ? 4 : 0) | (p.shield ? 8 : 0) | (p.kick ? 16 : 0) | (p.pierce ? 32 : 0) | (p.line ? 64 : 0), p.racing ? Math.ceil(p.raceLeft * 10) : 0, Math.round(p.speed * 10),
+    !p.alive && p.ghost && !p.racing ? Math.round(p.ghost.pos * 100) : -1, p.ghost ? Math.max(0, Math.ceil(p.ghost.cd * 10)) : 0] : 0);
+  if (S.gb.length) s.gb = S.gb.map(f => [f.from, f.to, Math.round(f.t * 100)]);
+  s.b = S.bombs.map(b => b.kick || b.pierce ? [b.x, b.y, Math.round(b.t * 100), b.kick ? Math.round(b.kick[0] * b.prog * 100) : 0,
+    b.kick ? Math.round(b.kick[1] * b.prog * 100) : 0, b.pierce ? 1 : 0] : [b.x, b.y, Math.round(b.t * 100)]);
   s.f = []; for (let i = 0; i < N; i++) if (S.fl[i] > 0) s.f.push(i, Math.round(S.fl[i] * 100));
   s.u = S.ups.flatMap(u => [u.i, u.t]);
   return s;
@@ -848,15 +1199,16 @@ const NET = {room: null, game: null, role: null, code: null, myPeer: null, seq: 
   seenHost: 0, joinedAt: 0, lastHostPres: null, sentJson: '', netT: 0, lobbyKey: ''};
 let snap = null;
 
-$('hostBtn').disabled = $('joinBtn').disabled = $('code').disabled = true;   // until we know online play works here
+$('hostBtn').disabled = $('joinBtn').disabled = $('tvBtn').disabled = $('code').disabled = true;   // until we know online play works here
 (async () => {
   let room = null;
   try { room = window.claude && window.claude.use ? await window.claude.use('room') : null; } catch { room = null; }
   if (!room && !window.claude && window.mqtt) room = relayNet();   // hosted outside claude.ai: phones meet on a public relay
   NET.room = room;
   $('netNote').hidden = !!room;
-  $('hostBtn').disabled = $('joinBtn').disabled = $('code').disabled = !room;
+  $('hostBtn').disabled = $('joinBtn').disabled = $('tvBtn').disabled = $('code').disabled = !room;
   if (room) room.onPeers(renderGames, () => { NET.room = null; renderGames(); });
+  renderGames();
 })();
 
 // Hosted outside claude.ai, phones talk through a free public MQTT relay over an ordinary secure WebSocket,
@@ -968,7 +1320,7 @@ function botSeat(seats, i){
 // Joining takes a moment (PeerJS has to reach its server). Extra taps during that time must not open
 // extra connections, or the host seats each one as its own ghost player.
 let busy = false;
-function setBusy(on){ busy = on; for (const id of ['hostBtn', 'joinBtn', 'practiceBtn']) $(id).disabled = on || (id !== 'practiceBtn' && !NET.room); $('games').inert = on; }
+function setBusy(on){ busy = on; for (const id of ['hostBtn', 'joinBtn', 'tvBtn', 'practiceBtn']) $(id).disabled = on || (id !== 'practiceBtn' && !NET.room); $('games').inert = on; }
 async function hostGame(){
   if (!NET.room || busy || NET.role) return;
   setBusy(true); toast('Opening a room…');
@@ -988,7 +1340,7 @@ async function openHost(){
   }
   if (!NET.game) return toast('Could not open a room. Check your connection and try again.');
   note('hosting ' + code + (NET.game.url ? ' on ' + NET.game.url : ''));
-  NET.role = 'host'; NET.code = code; NET.sentJson = '';
+  NET.role = 'host'; NET.code = code; NET.sentJson = ''; NET.sent = {};
   S = lobbyState([mySeat(), null, null, null]);
 }
 function mySeat(){ return {kind: 'h', name: myName(), ch: myChar === CUSTOM && !myCustom ? 0 : myChar, cu: myCustom}; }
@@ -999,35 +1351,54 @@ function practice(){
   seats[1] = botSeat(seats, 1); seats[2] = botSeat(seats, 2);
   S = lobbyState(seats);
 }
-async function joinGame(code){
+async function joinGame(code, tv){
   if (!NET.room || busy || NET.role) return;
-  setBusy(true); toast('Joining…');
-  try { await openJoin(code); } finally { setBusy(false); }
+  setBusy(true); toast(tv ? 'Connecting the TV…' : 'Joining…');
+  try { await openJoin(code, tv); } finally { setBusy(false); }
 }
-async function openJoin(code){
+// Each phone keeps a player key, so closing the page by accident and coming back gets the same seat.
+const PK = (() => { let k = store.get('bl-pk'); if (!k || !/^[a-z0-9]{8,16}$/.test(k)) { k = Math.random().toString(36).slice(2, 12); store.set('bl-pk', k); } return k; })();
+function lastGame(){
+  try { const g = JSON.parse(store.get('bl-last') || 'null'); return g && /^[A-Z]{4}$/.test(g.code) && Date.now() - g.at < 15 * 60 * 1000 ? g : null; } catch { return null; }
+}
+async function openJoin(code, tv){
   code = (code || '').toUpperCase();
   if (!/^[A-Z]{4}$/.test(code)) return toast('Room codes are 4 letters.');
   let g;
   try { g = await NET.room.join('bl-' + code.toLowerCase(), {find: true}); }
   catch (e) { return toast(/relay/.test(e && e.message) ? NO_RELAY : 'Could not join that room. Check your connection and try again.'); }
   if (g.hub === true) { g.leave(); return toast('No game found with code ' + code + '.'); }   // nobody was hosting it
-  NET.game = g; note('joined ' + code + (g.url ? ' on ' + g.url : ''));
-  Object.assign(NET, {role: 'client', code, snapN: 0, seq: 0, pend: [], seenHost: 0, joinedAt: performance.now(), lastHostPres: null});
+  NET.game = g; note((tv ? 'TV joined ' : 'joined ') + code + (g.url ? ' on ' + g.url : ''));
+  if (!tv) store.set('bl-last', JSON.stringify({code, at: Date.now()}));
+  document.body.classList.toggle('tv', !!tv); if (tv) wakeLock();
+  Object.assign(NET, {role: 'client', tv: !!tv, code, snapN: 0, seq: 0, fill: null, pend: [], seenHost: 0, joinedAt: performance.now(), lastHostPres: null});
   snap = null;
-  NET.game.presence({r: 'p', nm: myName(), ch: myChar, cu: myChar === CUSTOM ? myCustom : null, a: []}).catch(() => {});
+  NET.game.presence(tv ? {r: 'v', nm: 'TV'} : {r: 'p', pk: PK, nm: myName(), ch: myChar, cu: myChar === CUSTOM ? myCustom : null, a: []}).catch(() => {});
 }
 function leave(msg){
   if (NET.game && NET.role === 'client') NET.game.presence({bye: 1}).catch(() => {});   // tell the host this is on purpose
   if (NET.game) { const g = NET.game; setTimeout(() => g.leave().catch(() => {}), 150); NET.game = null; }
   if (NET.role === 'host' && NET.room) NET.room.presence({host: null, hn: null, n: null, ph: null}).catch(() => {});
-  NET.role = null; NET.lobbyKey = ''; S = null; snap = null; endPsy(); closeRace(); bursts = [];
+  NET.role = null; NET.tv = false; NET.lobbyKey = ''; S = null; snap = null; endPsy(); closeRace(); bursts = []; cam = null;
+  store.set('bl-last', ''); document.body.classList.remove('tv');
   show('home'); renderGames();
   if (msg) toast(msg);
 }
 
 function hostSync(){
   const byPeer = new Map(), now = performance.now();
-  for (const p of NET.game.peers()) if (!p.sameTab && p.presence && p.presence.r === 'p') byPeer.set(p.peer, p);
+  let tv = 0;
+  for (const p of NET.game.peers()) if (!p.sameTab && p.presence) { if (p.presence.r === 'p') byPeer.set(p.peer, p); else if (p.presence.r === 'v') tv++; }
+  S.tv = tv;
+  // Rejoin: a player who closed the page and came back has a new connection but the same player key.
+  S.seats.forEach((s, i) => {
+    if (!s || s.kind !== 'p' || !s.pk || (byPeer.has(s.peer) && !s.gone)) return;
+    for (const [peer, p] of byPeer) {
+      if (p.presence.pk !== s.pk || p.presence.bye || S.seats.some(o => o && o.peer === peer)) continue;
+      s.peer = peer; s.lost = 0; s.bye = false; s.gone = false; S.acks[i] = 0; note('seat ' + i + ' rejoined');
+      break;
+    }
+  });
   S.seats.forEach((s, i) => {
     if (!s || s.kind !== 'p' || s.gone) return;
     const p = byPeer.get(s.peer);
@@ -1041,7 +1412,7 @@ function hostSync(){
   if (S.ph === 'lobby') for (const [peer, p] of byPeer) {
     if (S.seats.some(s => s && s.peer === peer)) continue;
     const i = S.seats.findIndex(s => !s); if (i < 0) break;
-    S.seats[i] = {kind: 'p', peer, name: cleanName(p.presence.nm) || CNAMES[i], ch: 0}; S.acks[i] = 0;
+    S.seats[i] = {kind: 'p', peer, pk: typeof p.presence.pk === 'string' ? p.presence.pk.slice(0, 16) : '', name: cleanName(p.presence.nm) || CNAMES[i], ch: 0}; S.acks[i] = 0;
   }
   S.seats.forEach((s, i) => {
     if (!s || s.kind !== 'p') return;
@@ -1058,7 +1429,7 @@ function hostSync(){
     for (const e of a) {
       if (!Array.isArray(e) || typeof e[0] !== 'number' || e[0] <= S.acks[i]) continue;
       S.acks[i] = e[0]; s.inputAt = now;
-      if (typeof e[1] === 'string' && e[1].length === 1 && 'udlrbwqxJKFghijD'.includes(e[1])) doAct(i, e[1]);
+      if (typeof e[1] === 'string' && e[1].length === 1 && 'udlrbwqxJKFghijDTV'.includes(e[1])) doAct(i, e[1]);
     }
   });
   const key = [NET.code, S.seats.filter(Boolean).length, S.ph === 'lobby' ? 'lobby' : 'play', myName()].join('|');
@@ -1079,9 +1450,16 @@ function hostSend(dt){
   const js = JSON.stringify(snap);
   if (js === NET.sentJson) return;
   NET.netT = 1 / netHz(); NET.sentJson = js;
-  // The arena only changes when crates break or the ring closes: send it then, and every second for anyone who just joined.
+  // The arena and its hazards only change now and then (crates break, the ring closes, a new round): send them
+  // when they do, and every second for anyone who just joined.
   const out = Object.assign({}, snap, {t: Math.round(performance.now())});
-  if (out.g && out.g === NET.sentG && ++NET.gSkip < 15) delete out.g; else { NET.sentG = out.g; NET.gSkip = 0; }
+  NET.sent = NET.sent || {};
+  for (const k of ['g', 'hz']) {   // after a change, repeat it in the next few sends in case one gets merged away
+    const m = NET.sent[k] || (NET.sent[k] = {v: null, n: 0});
+    if (typeof out[k] !== 'string' || out[k] !== m.v) { m.v = out[k]; m.n = 0; }
+    else if (++m.n >= 15) m.n = 0;
+    else if (m.n >= 4) delete out[k];
+  }
   NET.snapBytes = js.length;
   NET.game.presence({r: 'h', s: out}).catch(() => {});
 }
@@ -1094,14 +1472,16 @@ function clientSync(now){
     if (host.presence !== NET.lastHostPres) {
       NET.lastHostPres = host.presence;
       let s = host.presence.s;
-      if (s.ph !== 'lobby' && typeof s.g !== 'string') {   // arena unchanged since the last state: keep ours
-        const same = snap && typeof snap.g === 'string' && Array.isArray(s.dm) && Array.isArray(snap.dm) && s.dm[0] === snap.dm[0] && s.dm[1] === snap.dm[1];
-        s = same ? Object.assign({}, s, {g: snap.g}) : null;
+      if (s.ph !== 'lobby') {   // the arena and hazards come now and then: keep the latest of each
+        const dm = Array.isArray(s.dm) ? s.dm.join('x') : '', c = NET.fill && NET.fill.dm === dm ? NET.fill : (NET.fill = {dm});
+        for (const k of ['g', 'hz']) if (typeof s[k] === 'string') c[k] = s[k];
+        if (typeof c.g !== 'string' || typeof c.hz !== 'string') s = null;
+        else if (typeof s.g !== 'string' || typeof s.hz !== 'string') s = Object.assign({}, s, {g: c.g, hz: c.hz});
       }
       if (s) {
         snap = s;
         const slot = mySlot(), ack = slot >= 0 && Array.isArray(snap.k) ? +snap.k[slot] || 0 : 0;
-        NET.pend = NET.pend.filter(e => e[0] > ack);
+        if (ack <= NET.seq) NET.pend = NET.pend.filter(e => e[0] > ack);   // (a bigger ack is from before a rejoin)
         // (not the first state: that's the relay's stored copy, possibly seconds old)
         if (typeof s.t === 'number' && ++NET.snapN > 1 && now - (NET.echoAt || 0) > 300) { NET.echoAt = now; NET.game.presence({e: s.t}).catch(() => {}); }
       }
@@ -1147,19 +1527,32 @@ function predStep(s, dt, now){
     Object.assign(pred, {on: true, x: Math.round(hx), y: Math.round(hy), moving: false, q: [], rd: s.rd});
     pred.tx = pred.x; pred.ty = pred.y;
   }
-  const bombs = new Set((Array.isArray(s.b) ? s.b : []).map(b => b[1] * W + b[0])), g = s.g;
+  const bombs = new Set((Array.isArray(s.b) ? s.b : []).map(b => b[1] * W + b[0])), g = s.g, hz = typeof s.hz === 'string' ? s.hz : '';
   const open = i => g[i] === '0' && !bombs.has(i);
+  if (Array.isArray(s.ts) && +s.ts[0] !== me) { pred.q = []; return; }   // frozen by someone's time stop
+  const land = () => {   // same rules as the host's landOn(): ice slides you on, a pad sends you to the other pad
+    const i = pred.y * W + pred.x;
+    if (hz[i] === '6' && pred.tp !== i) {
+      let o = -1; for (let k = 0; k < hz.length; k++) if (hz[k] === '6' && k !== i) o = k;
+      if (o >= 0 && open(o)) { pred.x = pred.tx = o % W; pred.y = pred.ty = (o / W) | 0; pred.tp = o; return; }
+    }
+    if (hz[i] !== '6') pred.tp = -1;
+    if (hz[i] === '5' && DIR[pred.face]) { const [dx, dy] = DIR[pred.face]; if (open(i + dy * W + dx)) pred.q = [pred.face]; }
+  };
+  const belt = HZ_DIR[(hz.charCodeAt(Math.round(pred.y) * W + Math.round(pred.x)) - 48) || 0];
+  if (belt && belt.length && !pred.moving && !pred.q.length) { if ((pred.cv = (pred.cv || 0) + dt) >= T.CONVEY) { pred.cv = 0; pred.q.push(belt); } } else pred.cv = 0;
   let rem = ((+p[8] || T.SPEED * 10) / 10) * dt;
   while (rem > 0) {
     if (!pred.moving) {
       if (!pred.q.length) break;
-      const [dx, dy] = DIR[pred.q.shift()], nx = pred.x + dx, ny = pred.y + dy;
+      const d = pred.q.shift(), [dx, dy] = DIR[d], nx = pred.x + dx, ny = pred.y + dy;
+      pred.face = d;
       if (!open(ny * W + nx)) continue;
       pred.tx = nx; pred.ty = ny; pred.moving = true;
     }
     const dist = Math.abs(pred.tx - pred.x) + Math.abs(pred.ty - pred.y), m = Math.min(rem, dist);
     pred.x += Math.sign(pred.tx - pred.x) * m; pred.y += Math.sign(pred.ty - pred.y) * m; rem -= m;
-    if (m >= dist - 1e-9) { pred.x = pred.tx; pred.y = pred.ty; pred.moving = false; }
+    if (m >= dist - 1e-9) { pred.x = pred.tx; pred.y = pred.ty; pred.moving = false; land(); }
   }
   // Reconcile: when we're idle with nothing unconfirmed and the host has held one tile for a moment, match it.
   if (hx !== pred.hx || hy !== pred.hy) { pred.hx = hx; pred.hy = hy; pred.hSince = now; }
@@ -1267,52 +1660,121 @@ function portrait(ch, seat, size){
 
 const TS = 16;
 let BW = W * TS, BH = H * TS;
-// Round moods: the floor and room lights change color each round (the subtle psychedelic layer).
+// Settings: each round takes place somewhere with its own floor, walls, breakable blocks, lights and weather.
+// Art is drawn here in code, 16x16 per tile, and built the first time a setting is shown.
+function rnd(seed){ let s = seed % 2147483647; if (s <= 0) s += 2147483646; return () => (s = s * 16807 % 2147483647) / 2147483647; }
+const hash = (a, c, e) => { let h = (Math.imul(a, 374761393) + Math.imul(c, 668265263) + Math.imul(e, 1274126177)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+function tile(fn){ const c = cnv(TS, TS), g = c.getContext('2d'); fn((x, y, w, h, col) => { g.fillStyle = col; g.fillRect(x, y, w, h); }, g); return c; }
+// Neon Alley keeps the original round-to-round color moods.
 const MOODS = [
   {a: '#120a1f', b: '#170c28', neon: '#ff2a6d', neon2: '#2de2e6', wall: '#3a2c58', wallTop: '#5a4888'},
   {a: '#09111d', b: '#0c1727', neon: '#2de2e6', neon2: '#b967ff', wall: '#273a5a', wallTop: '#3d5a88'},
   {a: '#16090f', b: '#1d0b16', neon: '#fcee0a', neon2: '#ff2a6d', wall: '#4e2238', wallTop: '#7a3858'},
   {a: '#08130f', b: '#0b1a14', neon: '#7dff6a', neon2: '#fcee0a', wall: '#22463a', wallTop: '#356b56'},
 ];
-function rnd(seed){ let s = seed % 2147483647; if (s <= 0) s += 2147483646; return () => (s = s * 16807 % 2147483647) / 2147483647; }
-const floorCache = new Map();   // per mood and arena size
-function floorArt(mi){
-  const key = mi + '|' + W + 'x' + H;
-  let f = floorCache.get(key); if (f) return f;
-  const m = MOODS[mi], r = rnd(97 + mi * 31);
-  const floor = cnv(BW, BH), fg = floor.getContext('2d');
-  const grout = cnv(BW, BH), gg = grout.getContext('2d');
+const brickWall = (top, face, trim) => tile(R => {
+  R(0, 0, TS, 11, top); R(0, 0, TS, 1, 'rgba(255,255,255,.12)'); R(0, 0, 1, 11, 'rgba(255,255,255,.12)');
+  R(TS - 1, 0, 1, 11, 'rgba(0,0,0,.25)'); R(3, 4, 4, 1, 'rgba(0,0,0,.25)'); R(9, 8, 4, 1, 'rgba(0,0,0,.25)');
+  R(0, 11, TS, 5, face); R(0, 11, TS, 1, trim); R(0, 15, TS, 1, 'rgba(0,0,0,.35)');
+});
+const SETTINGS = [
+  {name: 'Neon Alley', amb: 'rgb(112,100,150)', fx: 'none',
+    mood: rd => MOODS[(rd - 1) % MOODS.length],
+    floor(R, x, y, r, m){ R(0, 0, TS, TS, (x + y) & 1 ? m.a : m.b); R(0, 0, TS, 1, 'rgba(255,255,255,.035)'); R(0, 0, 1, TS, 'rgba(255,255,255,.035)');
+      R(0, TS - 1, TS, 1, 'rgba(0,0,0,.25)'); R(TS - 1, 0, 1, TS, 'rgba(0,0,0,.25)');
+      for (let k = 0; k < 4; k++) R(2 + ((r() * 12) | 0), 2 + ((r() * 12) | 0), 1, 1, r() < .5 ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.18)'); },
+    glow(R, x, y, r, m){ R(0, TS - 1, TS, 1, m.neon); R(TS - 1, 0, 1, TS, m.neon); },
+    walls: m => [brickWall(m.wallTop, m.wall, m.neon)],
+    crate: () => tile(R => {
+      R(1, 1, 14, 15, OUT); R(2, 2, 12, 10, '#4a3566'); R(2, 2, 12, 1, '#634a88'); R(2, 2, 1, 10, '#634a88');
+      R(2, 5, 12, 1, '#2f2142'); R(2, 8, 12, 1, '#2f2142'); R(4, 3, 1, 2, '#2f2142'); R(10, 6, 1, 2, '#2f2142'); R(6, 9, 1, 3, '#2f2142');
+      R(2, 12, 12, 3, '#2a1d3c'); for (let x = 2; x < 14; x += 4) R(x, 12, 2, 3, '#f9c80e'); R(2, 14, 12, 1, 'rgba(0,0,0,.35)'); })},
+  {name: 'Server Farm', amb: 'rgb(92,108,140)', fx: 'data', neon: '#2de2e6', neon2: '#3dff7a',
+    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#0c1118' : '#0e141c'); R(0, 0, TS, 1, '#1a2533'); R(0, 0, 1, TS, '#1a2533');
+      R(0, TS - 1, TS, 1, '#080b10'); R(TS - 1, 0, 1, TS, '#080b10');
+      for (const [a, c] of [[2, 2], [13, 2], [2, 13], [13, 13]]) R(a, c, 1, 1, '#2d3d52');
+      if (r() < .3) for (let k = 0; k < 4; k++) R(4, 5 + k * 2, 8, 1, '#0a0e14'); },
+    glow(R, x, y, r){ if (r() < .22) { const v = r() < .5; R(v ? 7 : 0, v ? 0 : 7, v ? 1 : TS, v ? TS : 1, '#2de2e6'); } },
+    walls: () => [0, 1].map(v => tile(R => {
+      R(0, 0, TS, 11, '#46536a'); R(0, 0, TS, 1, '#6a7a94'); R(1, 2, 14, 8, '#0c1118');
+      for (let k = 0; k < 4; k++) { R(2, 3 + k * 2, 12, 1, '#1a2230'); R(v ? 11 : 3, 3 + k * 2, 1, 1, '#3dff7a'); }
+      R(0, 11, TS, 5, '#2a3446'); R(0, 11, TS, 1, '#2de2e6'); R(2, 13, 12, 1, '#0a0e14'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })),
+    blink: (x, y, t) => hash(x, y, (t / 380) | 0) < .35 ? [3 + ((x * 5 + y) % 9), 3 + 2 * ((x + y * 3) & 3), hash(x, y, 9) < .5 ? '#fcee0a' : '#3dff7a'] : null,
+    crate: () => tile(R => {   // an old CRT terminal
+      R(1, 1, 14, 15, OUT); R(2, 2, 12, 12, '#59606e'); R(2, 2, 12, 1, '#7a8292'); R(3, 3, 10, 7, '#07170d');
+      R(4, 4, 6, 1, '#3dff7a'); R(4, 6, 4, 1, '#2bb85a'); R(4, 8, 7, 1, '#3dff7a'); R(3, 11, 3, 1, '#3a404c'); R(11, 11, 1, 1, '#ff2a5a');
+      R(2, 14, 12, 1, '#3a404c'); })},
+  {name: 'Rooftop Rain', amb: 'rgb(96,96,132)', fx: 'rain', neon: '#ff2a6d', neon2: '#b967ff',
+    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#1a1c23' : '#1c1e26');
+      for (let k = 0; k < 10; k++) R((r() * 16) | 0, (r() * 16) | 0, 1, 1, r() < .5 ? '#24262f' : '#14151b');
+      R(0, TS - 1, TS, 1, '#121318'); R(TS - 1, 0, 1, TS, '#121318');
+      if (r() < .28) { R(3, 6, 9, 4, '#0d0e13'); R(2, 7, 11, 2, '#0d0e13'); } },
+    glow(R, x, y, r){ if (r() < .28) { R(4, 7, 4, 1, '#ff2a6d'); R(8, 8, 3, 1, '#2de2e6'); } },
+    walls: () => [tile(R => {   // rooftop AC unit
+      R(0, 0, TS, 11, '#4a505d'); R(0, 0, TS, 1, '#6a7180'); R(3, 2, 10, 8, '#2e333d'); R(4, 3, 8, 6, '#3a404c');
+      R(7, 3, 2, 6, '#2e333d'); R(4, 5, 8, 2, '#2e333d'); R(0, 11, TS, 5, '#2b2f38'); R(0, 11, TS, 1, '#ff2a6d'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); }),
+      tile(R => {   // vent stack
+      R(0, 0, TS, 11, '#3f4450'); R(0, 0, TS, 1, '#5d6372'); for (let k = 0; k < 4; k++) R(2, 2 + k * 2, 12, 1, '#2a2e37');
+      R(0, 11, TS, 5, '#272a32'); R(0, 11, TS, 1, '#b967ff'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
+    crate: () => tile(R => {   // taped boxes
+      R(1, 1, 14, 15, OUT); R(2, 2, 12, 13, '#8a6a44'); R(2, 2, 12, 1, '#a8855a'); R(7, 2, 2, 13, '#c8b48a');
+      R(2, 8, 12, 1, '#5e4630'); R(3, 10, 3, 2, '#e9e4f5'); R(2, 14, 12, 1, '#5e4630'); })},
+  {name: 'Night Market', amb: 'rgb(116,88,92)', fx: 'steam', neon: '#ff9a3c', neon2: '#ff2a5a',
+    floor(R, x, y, r){ for (let k = 0; k < 4; k++) R(0, k * 4, TS, 4, ((x + k + y * 2) % 3) ? '#2a1a12' : '#2f1d14');
+      for (let k = 0; k < 4; k++) R(0, k * 4 + 3, TS, 1, '#1a0f0a'); R(((x * 7 + y * 3) % 12) + 2, 0, 1, TS, '#1f130d');
+      for (let k = 0; k < 3; k++) R((r() * 15) | 0, (r() * 15) | 0, 2, 1, '#38251a'); },
+    walls: () => [tile(R => {   // market stall: striped awning over a counter of goods
+      for (let k = 0; k < 8; k++) R(k * 2, 0, 2, 6, k & 1 ? '#e8d8b0' : '#b8202e'); R(0, 6, TS, 1, '#6e1018');
+      R(0, 7, TS, 4, '#3a2416'); for (const [a, c] of [[2, '#ff9a3c'], [6, '#7dff6a'], [10, '#fcee0a'], [13, '#ff2a5a']]) R(a, 8, 2, 2, c);
+      R(0, 11, TS, 5, '#24160f'); R(0, 11, TS, 1, '#ff9a3c'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); }),
+      tile(R => {
+      for (let k = 0; k < 8; k++) R(k * 2, 0, 2, 6, k & 1 ? '#e8d8b0' : '#1f6e4a'); R(0, 6, TS, 1, '#0f3a26');
+      R(0, 7, TS, 4, '#3a2416'); R(3, 8, 10, 2, '#c8a165'); R(0, 11, TS, 5, '#24160f'); R(0, 11, TS, 1, '#ff2a5a'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
+    lamp: (x, y) => hash(x, y, 3) < .22 ? '#ff9a3c' : null,
+    crate: () => tile(R => {   // bamboo crate of fruit
+      R(1, 1, 14, 15, OUT); R(2, 5, 12, 10, '#b88a3e'); for (let k = 0; k < 4; k++) R(2 + k * 3, 5, 1, 10, '#8a6428');
+      R(2, 9, 12, 1, '#8a6428'); for (const [a, c] of [[3, 2], [7, 1], [10, 2]]) { R(a, c, 3, 3, '#ff7a1a'); R(a, c, 1, 1, '#ffd23f'); }
+      R(2, 14, 12, 1, '#6a4a1e'); })},
+  {name: 'Toxic Sewer', amb: 'rgb(86,110,92)', fx: 'bubbles', neon: '#7dff6a', neon2: '#fcee0a',
+    floor(R, x, y, r){ R(0, 0, TS, TS, '#121a14'); for (let k = 0; k < 2; k++) { R(0, k * 8 + 7, TS, 1, '#0a0f0b'); R(((k * 8 + x * 5) % 16), k * 8, 1, 7, '#0a0f0b'); }
+      for (let k = 0; k < 6; k++) R((r() * 16) | 0, (r() * 16) | 0, 1, 1, r() < .5 ? '#1b2a1e' : '#0c120d');
+      if (hash(x, y, 5) < .14) { R(3, 3, 10, 10, '#060a07'); for (let k = 0; k < 4; k++) R(4, 4 + k * 2 + 1, 8, 1, '#22331f'); } },
+    glow(R, x, y){ if (hash(x, y, 5) < .14) R(4, 4, 8, 8, '#7dff6a'); },
+    walls: () => [tile(R => {   // brick with a pipe
+      R(0, 0, TS, 11, '#2c3a30'); R(0, 0, TS, 1, '#41544a'); for (let k = 0; k < 3; k++) R(0, 3 + k * 3, TS, 1, '#1d2820');
+      R(0, 5, TS, 3, '#5a6a5e'); R(0, 5, TS, 1, '#7d8f80'); R(9, 8, 1, 2, '#7dff6a');
+      R(0, 11, TS, 5, '#1b241e'); R(0, 11, TS, 1, '#7dff6a'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
+    crate: () => tile(R => {   // hazmat barrel
+      R(2, 1, 12, 15, OUT); R(3, 2, 10, 13, '#d9b51c'); R(3, 2, 10, 1, '#f2d04a'); R(3, 5, 10, 1, '#8a7210'); R(3, 11, 10, 1, '#8a7210');
+      R(6, 7, 4, 3, '#1a1406'); R(7, 6, 2, 1, '#1a1406'); R(3, 14, 10, 1, '#8a7210'); R(4, 3, 1, 10, 'rgba(255,255,255,.2)'); })},
+  {name: 'Cryo Lab', amb: 'rgb(112,128,164)', fx: 'snow', neon: '#9fe8ff', neon2: '#2d5bff',
+    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#18223a' : '#1b2640'); R(0, 0, TS, 1, '#2a3a58'); R(0, 0, 1, TS, '#2a3a58');
+      R(0, TS - 1, TS, 1, '#111828'); R(TS - 1, 0, 1, TS, '#111828');
+      for (let k = 0; k < 5; k++) R((r() * 15) | 0, (r() * 15) | 0, 1, 1, '#c8e8ff'); },
+    walls: () => [tile(R => {   // cryo tank
+      R(0, 0, TS, 11, '#a4aec0'); R(0, 0, TS, 1, '#dfe6f0'); R(0, 0, 2, 11, '#c4ccda'); R(3, 1, 10, 10, '#0d2a44'); R(4, 2, 8, 8, '#1f6a9a'); R(4, 2, 1, 8, '#9fe8ff');
+      R(0, 11, TS, 5, '#6a7488'); R(0, 11, TS, 1, '#9fe8ff'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
+    blink: (x, y, t) => [5 + (((t / 160 + x * 3) | 0) % 6), 9 - (((t / 220 + y * 5) | 0) % 7), '#c8f4ff'],   // a bubble rising in the tank
+    crate: () => tile(R => {   // ice block
+      R(1, 1, 14, 15, '#1a3a5a'); R(2, 2, 12, 13, '#7fc8f0'); R(2, 2, 12, 2, '#d8f4ff'); R(2, 2, 2, 12, '#b8e4ff');
+      R(7, 5, 1, 4, '#4a9ad0'); R(8, 9, 2, 1, '#4a9ad0'); R(10, 10, 1, 3, '#4a9ad0'); R(2, 14, 12, 1, '#3a7ab0'); })},
+];
+const envCache = new Map();
+function envArt(ei, rd){
+  const E = SETTINGS[ei] || SETTINGS[0], m = E.mood ? E.mood(rd || 1) : E, key = ei + '|' + (E.mood ? m.a : '') + '|' + W + 'x' + H;
+  let f = envCache.get(key); if (f) return f;
+  const r = rnd(97 + ei * 31 + (rd || 0) * (E.mood ? 7 : 0));
+  const floor = cnv(BW, BH), fg = floor.getContext('2d'), grout = cnv(BW, BH), gg = grout.getContext('2d');
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const X = x * TS, Y = y * TS;
-    fg.fillStyle = (x + y) & 1 ? m.a : m.b; fg.fillRect(X, Y, TS, TS);
-    fg.fillStyle = 'rgba(255,255,255,.035)'; fg.fillRect(X, Y, TS, 1); fg.fillRect(X, Y, 1, TS);
-    fg.fillStyle = 'rgba(0,0,0,.25)'; fg.fillRect(X, Y + TS - 1, TS, 1); fg.fillRect(X + TS - 1, Y, 1, TS);
-    for (let k = 0; k < 4; k++) { fg.fillStyle = r() < .5 ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.18)'; fg.fillRect(X + 2 + ((r() * 12) | 0), Y + 2 + ((r() * 12) | 0), 1, 1); }
-    gg.fillStyle = m.neon; gg.fillRect(X, Y + TS - 1, TS, 1); gg.fillRect(X + TS - 1, Y, 1, TS);
+    E.floor((a, c, w, h, col) => { fg.fillStyle = col; fg.fillRect(X + a, Y + c, w, h); }, x, y, r, m);
+    if (E.glow) E.glow((a, c, w, h, col) => { gg.fillStyle = col; gg.fillRect(X + a, Y + c, w, h); }, x, y, r, m);
   }
-  f = {floor, grout}; floorCache.set(key, f); return f;
+  f = {floor, grout, walls: E.walls(m), crate: E.crate(), neon: m.neon, neon2: m.neon2, E};
+  if (envCache.size > 24) envCache.clear();
+  envCache.set(key, f); return f;
 }
-const moodArt = MOODS.map(m => {
-  const wall = cnv(TS, TS), wg = wall.getContext('2d');
-  wg.fillStyle = m.wallTop; wg.fillRect(0, 0, TS, 11);
-  wg.fillStyle = 'rgba(255,255,255,.12)'; wg.fillRect(0, 0, TS, 1); wg.fillRect(0, 0, 1, 11);
-  wg.fillStyle = 'rgba(0,0,0,.25)'; wg.fillRect(TS - 1, 0, 1, 11); wg.fillRect(3, 4, 4, 1); wg.fillRect(9, 8, 4, 1);
-  wg.fillStyle = m.wall; wg.fillRect(0, 11, TS, 5);
-  wg.fillStyle = m.neon; wg.globalAlpha = .8; wg.fillRect(0, 11, TS, 1); wg.globalAlpha = 1;
-  wg.fillStyle = 'rgba(0,0,0,.35)'; wg.fillRect(0, 15, TS, 1);
-  return {wall};
-});
-const CRATE = (() => {
-  const c = cnv(TS, TS), g = c.getContext('2d');
-  g.fillStyle = OUT; g.fillRect(1, 1, 14, 15);
-  g.fillStyle = '#4a3566'; g.fillRect(2, 2, 12, 10);
-  g.fillStyle = '#634a88'; g.fillRect(2, 2, 12, 1); g.fillRect(2, 2, 1, 10);
-  g.fillStyle = '#2f2142'; g.fillRect(2, 5, 12, 1); g.fillRect(2, 8, 12, 1); g.fillRect(4, 3, 1, 2); g.fillRect(10, 6, 1, 2); g.fillRect(6, 9, 1, 3);
-  g.fillStyle = '#2a1d3c'; g.fillRect(2, 12, 12, 3);
-  for (let x = 2; x < 14; x += 4) { g.fillStyle = '#f9c80e'; g.fillRect(x, 12, 2, 3); }
-  g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(2, 14, 12, 1);
-  return c;
-})();
 const BOMB = ['#3a3058', '#ff2a5a'].map(body => sprite([
   '..........', '...kkkk...', '..kbbbbk..', '.kbwbbbbk.', '.kbwbbbbbk'.slice(0, 10), '.kbbbbbbk.', '.kbbbbbbk.', '..kbbbbk..', '...kkkk...', '..........'
 ].map(r => r.padEnd(10, '.')), {k: '#0e0a16', b: body, w: '#8a7fb5'}, true));
@@ -1324,7 +1786,19 @@ const UPS = [
   sprite(['.....yyy..', '....yyy...', '...yyy....', '..yyyyyy..', '.....yy...', '....yy....', '...yy.....', '..yy......'],
     {y: '#2de2e6'}, true),
 ];
-const UP_GLOW = ['#ff2a6d', '#ff7a1a', '#2de2e6'];
+UPS.push(
+  sprite(['..kkkkk...', '..kbbbk...', '..kbbbk...', '..kbbbkkk.', '.kbbbbbbbk', '.kwbbbbbbk', '.kkkkkkkkk'],   // kick: boot
+    {k: '#0e0a16', b: '#7dff6a', w: '#d8ffd0'}, true),
+  sprite(['..........', '....p.....', '....pp....', 'pppppppp..', 'pwwwwwwpp.', 'pppppppp..', '....pp....', '....p.....'],   // pierce: drill bolt
+    {p: '#b967ff', w: '#f0dcff'}, true),
+  sprite(['..........', '..........', '.kk.kk.kk.', 'kbbkbbkbbk', 'kbwkbwkbbk', '.kk.kk.kk.'],                              // line: bombs in a row
+    {k: '#0e0a16', b: '#fcee0a', w: '#fff6c0'}, true),
+  sprite(['...cccc...', '..cwwwwc..', '.cwccccwc.', '.cwccccwc.', '.cwccccwc.', '..cwccwc..', '...cwwc...', '....cc....'],  // shield
+    {c: '#9fe8ff', w: '#ffffff'}, true),
+);
+const UP_GLOW = ['#ff2a6d', '#ff7a1a', '#2de2e6', '#7dff6a', '#b967ff', '#fcee0a', '#9fe8ff'];
+const BOMB_P = sprite(['..........', '...kkkk...', '..kbbbbk..', '.kbwbbbbk.', 'kkbwbbbbkk', '.kbbbbbbk.', '.kbbbbbbk.', '..kbbbbk..', '...kkkk...', '..........'],
+  {k: '#0e0a16', b: '#7a3ad0', w: '#e0c8ff'}, true);   // pierce bombs: violet, with spikes
 // The finisher's race car (original design), nose to the right.
 const COMET = sprite([
   '........bbbbbbbbb...........', '.....bbbbbbcccccbbbb........', '...bbbbbbbbcccccccbbbbbb....', '.bbbbbbbbbbbbbbbbbbbbbbbbbb.',
@@ -1478,6 +1952,14 @@ $('mkSave').onclick = () => {
 function renderGames(){
   const box = $('games'); box.textContent = '';
   if (!NET.room || NET.role) return;
+  const lg = lastGame();
+  if (lg) {
+    const b = document.createElement('button'); b.className = 'ghost';
+    const a = document.createElement('span'); a.textContent = 'Rejoin your game';
+    const c = document.createElement('small'); c.textContent = lg.code;
+    b.append(a, c); b.onclick = () => { audio(); joinGame(lg.code); };
+    box.append(b);
+  }
   for (const p of NET.room.peers()) {
     const pr = p.presence || {};
     if (p.sameTab || typeof pr.host !== 'string' || !/^[A-Z]{4}$/.test(pr.host) || pr.ph !== 'lobby') continue;
@@ -1502,15 +1984,18 @@ function renderLobby(s){
   const key = JSON.stringify([seats, me, NET.role, NET.code, o]);
   if (key === lobbyKey) return; lobbyKey = key;
   const ob = $('opts'); ob.textContent = '';
-  const items = [];
-  if (WIKI_OK) items.push(['wiki', 'Wiki respawns', o[0] ? 'On' : 'Off', false], ['w1', 'Wiki in 1v1', o[1] ? 'On' : 'Off', !o[0]]);
-  items.push(['map', 'Map', o[2] ? 'Random' : 'Classic', false]);
+  const items = [], on = v => v ? 'On' : 'Off', env = +o[4];
+  items.push(['env', 'Setting', SETTINGS[env] ? SETTINGS[env].name : 'Mixed', false]);
+  if (WIKI_OK) items.push(['wiki', 'Wiki respawn', on(o[0]), false], ['w1', 'Wiki 1v1', on(o[1]), !o[0]]);
+  items.push(['map', 'Map', o[2] ? 'Random' : 'Classic', false], ['tm', 'Teams', o[8] ? '2v2' : 'Off', false],
+    ['pw', 'Power-ups+', on(o[5] !== 0), false], ['hz', 'Hazards', on(o[6] !== 0), false], ['gh', 'Ghosts', on(o[7] !== 0), false]);
   for (const [k, label, val, muted] of items) {
-    const bt = document.createElement('button'); bt.type = 'button'; bt.className = 'opt' + (muted ? ' muted' : '');
+    const bt = document.createElement('button'); bt.type = 'button'; bt.className = 'opt' + (muted ? ' muted' : '') + (k === 'env' ? ' wide' : '');
     const v = document.createElement('b'); v.textContent = val; if (val === 'Off') v.className = 'off';
     bt.append(label, v);
     if (authority) bt.onclick = () => {
-      S.opts[k] = k === 'map' ? (S.opts.map === 'random' ? 'classic' : 'random') : !S.opts[k];
+      S.opts[k] = k === 'map' ? (S.opts.map === 'random' ? 'classic' : 'random')
+        : k === 'env' ? (S.opts.env === 'mix' ? 0 : S.opts.env + 1 < SETTINGS.length ? S.opts.env + 1 : 'mix') : !S.opts[k];
       store.set('bl-opts', JSON.stringify(S.opts));
     };
     else bt.setAttribute('aria-disabled', 'true');
@@ -1525,7 +2010,8 @@ function renderLobby(s){
     if (st) row.style.setProperty('--c', COLORS[i]);
     const nm = document.createElement('span'), tag = document.createElement('em');
     let pic;
-    if (st) { pic = portrait(chOf(st[4]), i); nm.textContent = cleanName(st[0]) || CNAMES[i]; tag.textContent = i === me ? 'You' : st[1] === 'h' ? 'Host' : st[1] === 'b' ? 'Bot' : ''; }
+    if (st) { pic = portrait(chOf(st[4]), i); nm.textContent = cleanName(st[0]) || CNAMES[i];
+      tag.textContent = [i === me ? 'You' : st[1] === 'h' ? 'Host' : st[1] === 'b' ? 'Bot' : '', o[8] ? 'Team ' + ((i & 1) + 1) : ''].filter(Boolean).join(' · '); }
     else { pic = document.createElement('i'); pic.className = 'ph'; nm.textContent = NET.role === 'solo' ? 'empty' : 'waiting for a player…'; }
     row.append(pic, nm, tag); box.append(row);
   }
@@ -1534,8 +2020,10 @@ function renderLobby(s){
   $('addBot').disabled = count >= 4;
   $('dropBot').disabled = !seats.some(x => x && x[1] === 'b');
   $('startBtn').disabled = count < 2;
+  const tvs = +s.tv || 0;
   $('lobbyNote').textContent = authority
-    ? (count < 2 ? 'Need at least 2 players. Add a bot or wait for friends.' : 'Ready when you are.')
+    ? (count < 2 ? 'Need at least 2 players. Add a bot or wait for friends.' : 'Ready when you are.') + (tvs ? ' · ' + tvs + ' TV watching' : '')
+    : NET.tv ? 'TV mode: this screen shows the match. Players join on their phones with code ' + NET.code + '.'
     : (me < 0 ? 'Lobby is full. You can watch and join the next match.' : 'Waiting for the host to start.');
 }
 
@@ -1558,7 +2046,8 @@ surf.addEventListener('touchmove', e => {
 }, {passive: false});
 const swipe = d => g2048 ? move2048(d) : sendAct(d);
 // Taps: on or below the field they drop a bomb. The secret finisher is two taps ABOVE the field, then two
-// BELOW it, within SECRET_TIME. Taps above the field never do anything else, so the secret can't misfire.
+// BELOW it, within SECRET_TIME (3 + 3 = domain, 4 + 1 = Frozen Hour, 5 + 1 = Void Lance). Taps above the field
+// never do anything else, so the secrets can't misfire.
 // The secret opens aim mode: tap an enemy within reach (marked on the field) in the next AIM_TIME seconds.
 const secret = [];
 let aim = null;
@@ -1567,12 +2056,13 @@ function aimTargets(){   // seats I could hit right now, from the latest snapsho
   if (!Array.isArray(m) || !m[2]) return out;
   const mx = Math.round(m[0] / 100), my = Math.round(m[1] / 100);
   ps.forEach((q, i) => {
-    if (i === me || !Array.isArray(q) || !q[2] || (q[6] & 4)) return;
+    if (i === me || !Array.isArray(q) || !q[2] || (q[6] & 4) || (teamsOn() && (i & 1) === (me & 1))) return;
     if (Math.max(Math.abs(Math.round(q[0] / 100) - mx), Math.abs(Math.round(q[1] / 100) - my)) <= T.ULT_REACH) out.push(i);
   });
   return out;
 }
 function tap(x, y){
+  if (cam) { cam = null; return; }   // tap skips the killcam
   if (g2048) return;
   const fr = cv.getBoundingClientRect(), now = performance.now();
   if (aim && now < aim.until) {   // aiming: only a tap on a marked enemy does anything
@@ -1585,11 +2075,13 @@ function tap(x, y){
   aim = null;
   while (secret.length && now - secret[0][1] > T.SECRET_TIME * 1000) secret.shift();
   const seq = secret.map(k => k[0]).join(''), ups = (seq.match(/^A*/) || [''])[0].length, downs = seq.length - ups;
-  if (y < fr.top) { if (downs) secret.length = 0; secret.push(['A', now]); if (secret.length > 3) secret.shift(); return; }
+  if (y < fr.top) { if (downs) secret.length = 0; secret.push(['A', now]); if (secret.length > 5) secret.shift(); return; }
   if (y > fr.bottom && ups >= 2 && downs < ups) {   // finishing a secret: these taps don't bomb
     secret.push(['Z', now]);
     if (ups === 2 && downs + 1 === 2) { secret.length = 0; if (aimTargets().length) aim = {until: now + T.AIM_TIME * 1000}; }
     else if (ups === 3 && downs + 1 === 3) { secret.length = 0; sendAct('D'); }
+    else if (ups === 4) { secret.length = 0; sendAct('T'); }   // Frozen Hour
+    else if (ups === 5) { secret.length = 0; sendAct('V'); }   // Void Lance
     return;
   }
   secret.length = 0; sendAct('b');
@@ -1600,6 +2092,8 @@ function keyTap(){
   keyHist.length = 0;
   if (seq.endsWith('uuddlrlr') && aimTargets().length) aim = {until: now + T.AIM_TIME * 1000};   // then click a target
   else if (seq.endsWith('uuuddd')) sendAct('D');   // domain: up up up down down down, space
+  else if (seq.endsWith('llrr')) sendAct('T');     // Frozen Hour: left left right right, space
+  else if (seq.endsWith('rrll')) sendAct('V');     // Void Lance: right right left left, space
   else if (!g2048) sendAct('b');
 }
 const endTouch = e => {
@@ -1618,6 +2112,7 @@ addEventListener('keydown', e => {
   if (screen !== 'game' || !$('wiki').hidden || !$('bug').hidden) return;
   const k = {arrowup: 'u', w: 'u', arrowdown: 'd', s: 'd', arrowleft: 'l', a: 'l', arrowright: 'r', d: 'r', ' ': 'b'}[e.key.toLowerCase()];
   if (!k || e.repeat) return; e.preventDefault();
+  if (cam && k === 'b') { cam = null; return; }
   if (k === 'b') { if (!$('jumpBtn').hidden) $('jumpBtn').click(); else keyTap(); }
   else { keyHist.push([k, performance.now()]); if (keyHist.length > 8) keyHist.shift(); swipe(k); }
 });
@@ -1630,6 +2125,7 @@ $('code').addEventListener('keydown', e => { if (e.key === 'Enter') joinGame($('
 $('hostBtn').onclick = () => { audio(); hostGame(); };
 $('practiceBtn').onclick = () => { audio(); practice(); };
 $('joinBtn').onclick = () => { audio(); joinGame($('code').value); };
+$('tvBtn').onclick = () => { audio(); joinGame($('code').value, true); };
 $('wtRange').addEventListener('input', () => {
   if (!S || (NET.role !== 'host' && NET.role !== 'solo')) return;
   S.opts.wt = Math.min(10, Math.max(1, Math.round(+$('wtRange').value || 5)));
@@ -1639,6 +2135,7 @@ $('addBot').onclick = () => { const i = S.seats.findIndex(s => !s); if (i >= 0) 
 $('dropBot').onclick = () => { for (let i = 3; i >= 0; i--) if (S.seats[i] && S.seats[i].kind === 'b') { S.seats[i] = null; break; } };
 $('startBtn').onclick = () => { audio(); wakeLock(); newMatch(); };
 $('rematchBtn').onclick = () => { newMatch(); };
+$('shareBtn').onclick = () => shareResult();
 $('toLobbyBtn').onclick = () => { toLobby(); };
 for (const id of ['leaveLobby', 'leaveOver', 'leaveGame']) $(id).onclick = () => leave();
 
@@ -1679,6 +2176,14 @@ function light(x, y, r, hex, a){
 const disp = [null, null, null, null];   // smoothed positions for remote snapshots
 const anim = [0, 1, 2, 3].map(() => ({walk: 0, flip: false, px: 0, py: 0, alive: false, dx: 0, dy: 0, hist: []}));
 let dust = [];
+function telePuff(x, y, now){
+  for (let k = 0; k < 12; k++) { const a = k / 12 * 6.28; dust.push({t0: now, s: 1, x: x * TS + 8, y: y * TS + 8, vx: Math.cos(a) * 45, vy: Math.sin(a) * 45, c: '#ff3df2'}); }
+  blip(1200);
+}
+function shieldPop(x, y, now){   // a shield soaking up a hit: shards flying off
+  for (let k = 0; k < 10; k++) { const a = k / 10 * 6.28; dust.push({t0: now, s: 2, x: x * TS + 8, y: y * TS + 6, vx: Math.cos(a) * 60, vy: Math.sin(a) * 60, c: '#9fe8ff'}); }
+  blip(1320); setTimeout(() => blip(990), 60);
+}
 const ghostCache = new Map();
 function ghostSprite(ch, seat, leg){   // seat-colored silhouette for dash afterimages
   const key = ch + ':' + seat + ':' + leg;
@@ -1694,36 +2199,173 @@ function drawChar(img, X, Y, flip){
   if (!flip) return b.drawImage(img, X + 1, Y);
   b.save(); b.translate(X + TS, 0); b.scale(-1, 1); b.drawImage(img, 1, Y); b.restore();
 }
-let decals = [], decalRound = -1;
+let decals = [], decalRound = -1, flash = 0;
+// Hazards on the floor: belts with chevrons rolling along, ice sheen, teleporter pads.
+function drawHazards(hz, str, now){
+  for (let i = 0; i < hz.length && i < N; i++) {
+    const h = hz.charCodeAt(i) - 48; if (!h || str[i] === '1' || str[i] === '3') continue;
+    const X = (i % W) * TS, Y = ((i / W) | 0) * TS;
+    if (h >= 1 && h <= 4) {
+      const d = HZ_DIR[h], off = reduce ? 0 : ((now / 45) | 0) % 8;
+      const at = (a, q) => d === 'r' ? [a, q] : d === 'l' ? [15 - a, q] : d === 'd' ? [q, a] : [q, 15 - a];
+      b.fillStyle = '#14121b'; b.fillRect(X, Y, TS, TS);
+      b.fillStyle = '#2c2838'; for (let a = 0; a < 16; a++) for (const q of [1, 14]) { const [x, y] = at(a, q); b.fillRect(X + x, Y + y, 1, 1); }
+      b.fillStyle = 'rgba(252,238,10,.6)';
+      for (const c of [off, off + 8]) for (let t = 0; t < 4; t++) for (const q of [4 + t, 11 - t]) {
+        const [x, y] = at((c - t + 16) % 16, q); b.fillRect(X + x, Y + y, 1, 1);
+      }
+    } else if (h === 5) {
+      b.fillStyle = 'rgba(170,225,255,.3)'; b.fillRect(X, Y, TS, TS);
+      b.fillStyle = 'rgba(255,255,255,.5)'; b.fillRect(X + 3, Y + 3, 3, 1); b.fillRect(X + 3, Y + 4, 1, 1); b.fillRect(X + 10, Y + 10, 2, 1);
+      if (!reduce && hash(i, (now / 500) | 0, 4) < .15) { b.fillStyle = '#fff'; b.fillRect(X + 7, Y + 6, 1, 1); }
+    } else if (h === 6) {
+      const sp = now / 300;
+      b.fillStyle = '#1a0a1e'; b.fillRect(X + 3, Y + 3, 10, 10); b.fillRect(X + 2, Y + 5, 12, 6); b.fillRect(X + 5, Y + 2, 6, 12);
+      b.fillStyle = '#ff3df2';
+      for (let k = 0; k < 20; k++) { const a = k / 20 * 6.283; b.fillRect(Math.round(X + 7.5 + Math.cos(a) * 6), Math.round(Y + 7.5 + Math.sin(a) * 6), 1, 1); }
+      b.fillStyle = '#ffd1fb';
+      for (let k = 0; k < 3; k++) { const a = sp + k * 2.09; b.fillRect(Math.round(X + 7.5 + Math.cos(a) * 3), Math.round(Y + 7.5 + Math.sin(a) * 3), 1, 1); }
+    }
+  }
+}
+// Ghosts float along the edge, translucent and wobbling; a lobbed bomb arcs in.
+const ghostDisp = [null, null, null, null];
+let ghostTip = false;
+function drawGhosts(s, now, seats, me){
+  const ps = Array.isArray(s.p) ? s.p : [], per = perimeter(), L = per.length;
+  ps.forEach((p, i) => {
+    if (!Array.isArray(p) || p[2] || !(+p[9] >= 0) || s.ph !== 'play') { ghostDisp[i] = null; return; }
+    const f = +p[9] / 100, a = per[Math.floor(f) % L], c = per[(Math.floor(f) + 1) % L], k = f - Math.floor(f);
+    let x = a % W + (c % W - a % W) * k, y = ((a / W) | 0) + (((c / W) | 0) - ((a / W) | 0)) * k;
+    const d = ghostDisp[i];
+    if (!d || Math.abs(d.x - x) + Math.abs(d.y - y) > 3) ghostDisp[i] = {x, y};
+    else { d.x += (x - d.x) * .3; d.y += (y - d.y) * .3; x = d.x; y = d.y; }
+    const X = Math.round(x * TS), Y = Math.max(2, Math.round(y * TS - 4 + (reduce ? 0 : Math.sin(now / 260 + i) * 2)));
+    b.globalAlpha = .28; drawChar(ghostSprite(chOf(seats[i] && seats[i][4]), i, 0), X, Y + 1, false);
+    b.globalAlpha = .55 + (reduce ? 0 : .15 * Math.sin(now / 150 + i)); drawChar(charSprite(chOf(seats[i] && seats[i][4]), i, 0, 0), X, Y, false);
+    b.globalAlpha = 1;
+    const top = Y < 9;   // on the top edge, hang the markers below instead of above
+    if (!(+p[10] > 0)) b.drawImage(BOMB[0], X + 11, top ? Y + 10 : Y - 4, 7, 7);   // ready to throw
+    if (i === me) {
+      const my = top ? Y + 22 : Y - 8, sg = top ? -1 : 1;
+      b.fillStyle = '#ffffff'; b.fillRect(X + 6, my, 5, 1); b.fillRect(X + 7, my + sg, 3, 1); b.fillRect(X + 8, my + 2 * sg, 1, 1);
+      if (!ghostTip) { ghostTip = true; toast(TOUCH ? "You're a ghost. Swipe to drift along the edge, tap to throw a bomb in. A kill brings you back."
+        : "You're a ghost. Arrows drift along the edge, space throws a bomb in. A kill brings you back."); }
+    }
+  });
+  for (const f of Array.isArray(s.gb) ? s.gb : []) {
+    const k = Math.max(0, Math.min(1, 1 - (+f[2] / 100) / T.GHOST_FLY)), a = +f[0], c = +f[1];
+    const x = (a % W + (c % W - a % W) * k) * TS + 2, y = (((a / W) | 0) + (((c / W) | 0) - ((a / W) | 0)) * k) * TS + 3 - Math.sin(k * Math.PI) * 18;
+    b.fillStyle = 'rgba(0,0,0,.35)'; b.fillRect(Math.round((a % W + (c % W - a % W) * k) * TS) + 4, Math.round((((a / W) | 0) + (((c / W) | 0) - ((a / W) | 0)) * k) * TS) + 13, 8, 2);
+    b.drawImage(BOMB[0], Math.round(x), Math.round(y), 12, 12);
+  }
+}
+// Laser lanes: emitters on the walls at each end; a flickering warning line, then the beam.
+function drawLaser(hz, lz, now, emittersOnly){
+  for (let i = 0; i < hz.length && i < N; i++) {
+    const h = hz[i]; if (h !== '8' && h !== '9') continue;
+    const st = h === '8' ? 1 : W, X = (i % W) * TS, Y = ((i / W) | 0) * TS;
+    if (emittersOnly) {
+      for (const sg of [-1, 1]) {
+        if (hz[i + sg * st] === h) continue;
+        const E = i + sg * st, EX = (E % W) * TS, EY = ((E / W) | 0) * TS;
+        b.fillStyle = '#0e0a16'; b.fillRect(EX + 4, EY + 3, 8, 8);
+        b.fillStyle = '#3a3048'; b.fillRect(EX + 5, EY + 4, 6, 6);
+        b.fillStyle = lz && lz[0] ? '#ff2a5a' : '#6a1a2a'; b.fillRect(EX + 7, EY + 6, 2, 2);
+      }
+      continue;
+    }
+    if (!lz || !lz[0]) continue;
+    const k = (+lz[1] || 0) / 100;
+    if (lz[0] === 1) {
+      if (((now / (140 - k * 100)) | 0) & 1) continue;
+      b.fillStyle = `rgba(255,42,90,${.35 + k * .5})`;
+      for (let a = 0; a < 16; a += 3) h === '8' ? b.fillRect(X + a, Y + 7, 2, 1) : b.fillRect(X + 7, Y + a, 1, 2);
+    } else {
+      const w = 3 + (((now / 50) | 0) & 1);
+      b.fillStyle = '#ff2a5a'; h === '8' ? b.fillRect(X, Y + 8 - w, TS, w * 2 - 1) : b.fillRect(X + 8 - w, Y, w * 2 - 1, TS);
+      b.fillStyle = '#ffffff'; h === '8' ? b.fillRect(X, Y + 7, TS, 2) : b.fillRect(X + 7, Y, 2, TS);
+    }
+  }
+}
+// Weather and ambience per setting, drawn over the lit scene so it reads as atmosphere.
+let wx = [], wxKind = '', thunderAt = 0;
+function weather(kind, dt, now){
+  if (reduce || kind === 'none' || !kind) { wx = []; return; }
+  if (kind !== wxKind) { wx = []; wxKind = kind; }
+  const want = {rain: 70, snow: 40, data: 26, steam: 14, bubbles: 16}[kind] || 0;
+  while (wx.length < want) wx.push({x: Math.random() * BW, y: Math.random() * BH, v: Math.random(), age: Math.random() * 3});
+  for (const p of wx) {
+    p.age += dt;
+    if (kind === 'rain') {
+      p.y += dt * (170 + p.v * 60); p.x -= dt * 30;
+      if (p.y > BH) { p.y = -6; p.x = Math.random() * (BW + 30); }
+      b.fillStyle = 'rgba(170,190,255,.35)'; b.fillRect(p.x | 0, p.y | 0, 1, 4);
+      if (p.v < .1 && p.y > BH * p.v * 9) { b.fillStyle = 'rgba(170,190,255,.25)'; b.fillRect((p.x | 0) - 1, p.y | 0, 3, 1); }
+    } else if (kind === 'snow') {
+      p.y += dt * (12 + p.v * 14); p.x += Math.sin(p.age * 1.7 + p.v * 9) * dt * 8;
+      if (p.y > BH) { p.y = -2; p.x = Math.random() * BW; }
+      b.fillStyle = 'rgba(230,245,255,.7)'; b.fillRect(p.x | 0, p.y | 0, p.v < .3 ? 2 : 1, p.v < .3 ? 2 : 1);
+    } else if (kind === 'data') {
+      p.y += dt * (20 + p.v * 30); if (p.y > BH) { p.y = -4; p.x = Math.random() * BW; }
+      b.fillStyle = `rgba(61,255,122,${.15 + .25 * (((now / 120 + p.v * 9) | 0) & 1)})`; b.fillRect(p.x | 0, p.y | 0, 1, 2);
+    } else if (kind === 'steam') {
+      p.y -= dt * (8 + p.v * 6); p.x += Math.sin(p.age + p.v * 5) * dt * 4;
+      if (p.y < -8) { p.y = BH + 4; p.x = Math.random() * BW; p.age = 0; }
+      b.fillStyle = 'rgba(220,210,230,.07)'; b.fillRect((p.x | 0) - 2, p.y | 0, 5, 3); b.fillRect((p.x | 0) - 1, (p.y | 0) - 2, 3, 2);
+    } else if (kind === 'bubbles') {
+      p.y -= dt * (6 + p.v * 8); if (p.y < -4 || p.age > 4) { p.y = Math.random() * BH; p.x = Math.random() * BW; p.age = 0; }
+      b.fillStyle = `rgba(125,255,106,${.3 * Math.max(0, 1 - p.age / 4)})`; b.fillRect(p.x | 0, p.y | 0, 2, 1); b.fillRect((p.x | 0), (p.y | 0) - 1, 1, 1);
+    }
+  }
+  if (kind === 'rain') {   // the odd lightning flash, with thunder
+    if (!thunderAt) thunderAt = now + 8000 + Math.random() * 14000;
+    if (now > thunderAt) { thunderAt = now + 12000 + Math.random() * 16000; flash = now + 90; setTimeout(thunder, 300 + Math.random() * 500); }
+  }
+}
 let shake = 0, lastBoom = -1;
 
+let hitstop = 0, replaying = false;
 function drawGame(s, dt, now){
-  const str = typeof s.g === 'string' ? s.g : '', mood = ((+s.rd || 1) - 1) % MOODS.length, M = MOODS[mood], art = moodArt[mood], fa = floorArt(mood);
+  if (now < hitstop && !replaying) {   // a kill freezes the frame for a beat, shaking, with a white kick
+    if (shake > 0) shake -= dt;
+    const j = () => Math.round((Math.random() - .5) * 4) * SCALE;
+    blit(j(), j(), 0, now);
+    ctx.fillStyle = 'rgba(255,255,255,.14)'; ctx.fillRect(0, 0, cv.width, cv.height);
+    return;
+  }
+  const str = typeof s.g === 'string' ? s.g : '', ei = SETTINGS[+s.en] ? +s.en : 0, fa = envArt(ei, +s.rd || 1), E = fa.E;
   const seats = Array.isArray(s.seat) ? s.seat : [], remote = NET.role === 'client';
-  if (typeof s.bx === 'number' && s.bx !== lastBoom) { if (lastBoom >= 0 && s.bx > lastBoom) { shake = reduce ? 0 : .2; boom(); } lastBoom = s.bx; }
+  if (!replaying && typeof s.bx === 'number' && s.bx !== lastBoom) { if (lastBoom >= 0 && s.bx > lastBoom) { shake = reduce ? 0 : .2; boom(); } lastBoom = s.bx; }
   if (s.rd !== decalRound || s.ph === 'count') { decals = []; decalRound = s.rd; }
 
   // ground
   b.globalCompositeOperation = 'source-over';
   b.drawImage(fa.floor, 0, 0);
   b.globalAlpha = reduce ? .12 : .08 + .07 * Math.sin(now / 900); b.drawImage(fa.grout, 0, 0); b.globalAlpha = 1;
-  for (const d of decals) b.drawImage(d.img, d.x, d.y);
+  if (!replaying) for (const d of decals) b.drawImage(d.img, d.x, d.y);
   dust = dust.filter(d => now - d.t0 < 350);
   for (const d of dust) {
     const t = (now - d.t0) / 1000;
-    b.globalAlpha = 1 - t / .35; b.fillStyle = '#d8d0ee';
+    b.globalAlpha = 1 - t / .35; b.fillStyle = d.c || '#d8d0ee';
     b.fillRect(Math.round(d.x + d.vx * t), Math.round(d.y + d.vy * t), d.s, d.s);
   }
   b.globalAlpha = 1;
+  const hzs = typeof s.hz === 'string' ? s.hz : '';
+  if (hzs) drawHazards(hzs, str, now);
   // world, row by row so lower things overlap higher ones
   const fire = new Map(), f = Array.isArray(s.f) ? s.f : [];
   for (let k = 0; k + 1 < f.length; k += 2) fire.set(f[k], f[k + 1] / 100);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const c = str[y * W + x];
-    if (c === '1') b.drawImage(art.wall, x * TS, y * TS);
-    else if (c === '2') b.drawImage(CRATE, x * TS, y * TS);
+    if (c === '1') {
+      b.drawImage(fa.walls[fa.walls.length > 1 ? (hash(x, y, 1) * fa.walls.length) | 0 : 0], x * TS, y * TS);
+      const bl = E.blink && E.blink(x, y, now); if (bl) { b.fillStyle = bl[2]; b.fillRect(x * TS + bl[0], y * TS + bl[1], 1, 1); }
+    }
+    else if (c === '2') b.drawImage(fa.crate, x * TS, y * TS);
     else if (c === '3') { b.fillStyle = '#000'; b.fillRect(x * TS, y * TS, TS, TS); }
   }
+  if (hzs) drawLaser(hzs, s.lz, now, true);
   const u = Array.isArray(s.u) ? s.u : [];
   for (let k = 0; k + 1 < u.length; k += 2) {
     const i = u[k], t = u[k + 1] | 0, img = UPS[t] || UPS[0], bob = reduce ? 0 : Math.round(Math.sin(now / 220 + i));
@@ -1732,11 +2374,11 @@ function drawGame(s, dt, now){
     b.fillStyle = OUT; b.fillRect(X + 2, Y + 3, 12, 11);
     b.drawImage(img, X + 2, Y + 2 + bob);
   }
-  for (const gb of ghostBombs) { b.globalAlpha = .55; b.drawImage(BOMB[0], (gb.i % W) * TS + 2, ((gb.i / W) | 0) * TS + 3, 12, 12); b.globalAlpha = 1; }
+  if (!replaying) for (const gb of ghostBombs) { b.globalAlpha = .55; b.drawImage(BOMB[0], (gb.i % W) * TS + 2, ((gb.i / W) | 0) * TS + 3, 12, 12); b.globalAlpha = 1; }
   for (const bm of Array.isArray(s.b) ? s.b : []) {
     const t = bm[2] / 100, hot = t < .8 && ((now / 90) | 0) & 1, sq = reduce ? 0 : ((now / 140) | 0) & 1;
-    const X = bm[0] * TS + 2, Y = bm[1] * TS + 3;
-    b.drawImage(BOMB[hot ? 1 : 0], X, Y + sq, 12, 12 - sq);
+    const X = Math.round((bm[0] + (+bm[3] || 0) / 100) * TS) + 2, Y = Math.round((bm[1] + (+bm[4] || 0) / 100) * TS) + 3;
+    b.drawImage(hot ? BOMB[1] : bm[5] ? BOMB_P : BOMB[0], X, Y + sq, 12, 12 - sq);
     b.fillStyle = '#ff9a3c'; b.fillRect(X + 8, Y, 1, 2);
     b.fillStyle = ((now / 60) | 0) & 1 ? '#fff6d5' : '#ffd23f'; b.fillRect(X + 9, Y - 1 + (((now / 100) | 0) & 1), 1, 1);
   }
@@ -1754,23 +2396,27 @@ function drawGame(s, dt, now){
     const p = ps[i], A = anim[i];
     if (!Array.isArray(p)) { disp[i] = null; A.alive = false; continue; }
     let x = p[0] / 100, y = p[1] / 100;
-    if (remote && i === me && pred.on) { x = pred.x; y = pred.y; disp[i] = {x, y}; }
+    if (remote && i === me && pred.on && !replaying) { x = pred.x; y = pred.y; disp[i] = {x, y}; }
     else if (remote) {
       const d = disp[i];
       if (!d || Math.abs(d.x - x) + Math.abs(d.y - y) > 2) disp[i] = {x, y};
       else { const k = 1 - Math.exp(-dt * 22); d.x += (x - d.x) * k; d.y += (y - d.y) * k; }
       x = disp[i].x; y = disp[i].y;
     }
-    if (A.alive && !p[2] && (s.ph === 'play' || s.ph === 'round')) {
+    if (A.alive && !p[2] && (s.ph === 'play' || s.ph === 'round') && replaying) spawnBurst(i, A.px, A.py, chOf(seats[i] && seats[i][4]), now);
+    else if (A.alive && !p[2] && (s.ph === 'play' || s.ph === 'round')) {
       decals.push({img: splat(COLORS[i]), x: Math.round(A.px * TS) - 2, y: Math.round(A.py * TS) - 2});
       spawnBurst(i, A.px, A.py, chOf(seats[i] && seats[i][4]), now);
+      if (!reduce && !Array.isArray(s.dx) && !Array.isArray(s.ul)) { hitstop = now + 90; shake = Math.max(shake, .3); }
       if (i === me) { startPsy(now, A.px, A.py); prefetchRace(); }
     }
     if (!A.alive && p[2] && s.ph === 'play' && (p[6] & 4)) { bursts.push({cx: x * TS + 8, cy: y * TS + 13, t0: now, parts: [], col: COLORS[i]}); disp[i] = {x, y}; }   // respawned
     if (i === me && p[2]) endPsy();
+    if (i === me && !p[2] && +p[9] >= 0 && psy.on && now - psy.t0 > 1400) endPsy();   // ghosts need a clear view
     A.alive = !!p[2];
     if (!p[2]) continue;
     const ddx = x - A.px, ddy = y - A.py, jump = Math.abs(ddx) + Math.abs(ddy), moving = jump > .002 && jump < 1.5;   // bigger = teleport (respawn, new round)
+    if (jump >= 1.5 && A.alive && hzs[Math.round(y) * W + Math.round(x)] === '6') { telePuff(A.px, A.py, now); telePuff(x, y, now); }
     if (moving) {
       const nx = Math.sign(Math.round(ddx * 1000)), ny = Math.sign(Math.round(ddy * 1000));
       if (!A.walk || nx !== A.dx || ny !== A.dy) spawnDust(A.px, A.py, nx, ny);   // kick-off puff on each new dash
@@ -1778,7 +2424,9 @@ function drawGame(s, dt, now){
     } else A.hist.length = 0;
     A.walk = moving ? A.walk + dt : 0; A.px = x; A.py = y;
     if (p[5] === 'l') A.flip = true; else if (p[5] === 'r') A.flip = false;
-    order.push({i, x, y, ch: chOf(seats[i] && seats[i][4]), inv: !!(p[6] & 4)});
+    if (A.shield && !(p[6] & 8) && s.ph === 'play') shieldPop(x, y, now);
+    A.shield = !!(p[6] & 8);
+    order.push({i, x, y, ch: chOf(seats[i] && seats[i][4]), inv: !!(p[6] & 4), shield: !!(p[6] & 8)});
   }
   order.sort((a, c) => a.y - c.y);
   for (const o of order) {
@@ -1800,21 +2448,41 @@ function drawGame(s, dt, now){
     if (o.inv && ((now / 80) | 0) & 1) continue;            // spawn shield blink
     const lean = A.walk > 0 ? 1 : 0;
     drawChar(charSprite(o.ch, o.i, leg, ((now / 90) | 0) % 3), X + A.dx * lean, Y - 3 - leg + A.dy * lean, A.flip);
+    if (o.shield) {                                          // shield bubble: a pixel ring
+      const cx = X + 8, cy = Y + 5, sp = now / 400;
+      for (let k = 0; k < 28; k++) {
+        const an = k / 28 * 6.283;
+        b.fillStyle = (k + ((now / 90) | 0)) % 7 ? 'rgba(159,232,255,.5)' : '#ffffff';
+        b.fillRect(Math.round(cx + Math.cos(an + sp) * 9), Math.round(cy + Math.sin(an + sp) * 10), 1, 1);
+      }
+    }
   }
 
   // lighting: colored lights over a dim ambient, multiplied; then a soft additive glow
   gl.globalCompositeOperation = 'source-over'; gl.clearRect(0, 0, BW, BH); gl.globalCompositeOperation = 'lighter';
-  light(0, 0, 150, M.neon, .45); light(BW, BH, 150, M.neon2, .45);
+  light(0, 0, 150, fa.neon, .45); light(BW, BH, 150, fa.neon2, .45);
+  if (E.lamp) for (let i = 0; i < N; i++) if (str[i] === '1') { const lc2 = E.lamp(i % W, (i / W) | 0); if (lc2) light((i % W) * TS + 8, ((i / W) | 0) * TS + 4, 26, lc2, .5 + .08 * Math.sin(now / 140 + i)); }
   for (const o of order) light(o.x * TS + 8, o.y * TS + 7, 34, COLORS[o.i], .55);
   for (const bm of Array.isArray(s.b) ? s.b : []) light(bm[0] * TS + 8, bm[1] * TS + 8, 18 + (((now / 90) | 0) & 1) * 4, '#ff2a5a', .6);
   for (const [i, ttl] of fire) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 26, '#ff9a3c', Math.min(.8, ttl * 1.6));
   for (let k = 0; k + 1 < u.length; k += 2) light((u[k] % W) * TS + 8, ((u[k] / W) | 0) * TS + 8, 14, UP_GLOW[u[k + 1]] || '#fff', .5);
-  lc.globalCompositeOperation = 'source-over'; lc.fillStyle = T.AMBIENT; lc.fillRect(0, 0, BW, BH);
+  if (Array.isArray(s.ln) && s.ln[2] / 100 >= T.LANCE_WIND) for (const i of lanceBand(+s.ln[3], +s.ln[4], s.ln[1])) if (hash(i, 1, 1) < .3) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 26, '#b967ff', .6);
+  for (let i = 0; i < hzs.length && i < N; i++) {
+    if (hzs[i] === '6') light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 22, '#ff3df2', .5);
+    else if ((hzs[i] === '8' || hzs[i] === '9') && Array.isArray(s.lz) && s.lz[0] === 2) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 18, '#ff2a5a', .55);
+  }
+  lc.globalCompositeOperation = 'source-over'; lc.fillStyle = flash > now ? '#d8d8ff' : E.amb || T.AMBIENT; lc.fillRect(0, 0, BW, BH);
   lc.globalCompositeOperation = 'lighter'; lc.drawImage(glowC, 0, 0);
   b.globalCompositeOperation = 'multiply'; b.drawImage(lightC, 0, 0);
   b.globalCompositeOperation = 'lighter'; b.globalAlpha = .35; b.drawImage(glowC, 0, 0); b.globalAlpha = 1;
-  b.globalCompositeOperation = 'source-over'; b.drawImage(VIGNETTE, 0, 0);
+  b.globalCompositeOperation = 'source-over';
+  weather(E.fx, dt, now);
+  b.drawImage(VIGNETTE, 0, 0);
 
+  if (hzs && Array.isArray(s.lz)) drawLaser(hzs, s.lz, now, false);
+  drawGhosts(s, now, seats, me);
+  if (Array.isArray(s.ln)) drawLance(s, now);
+  if (Array.isArray(s.ts)) drawStop(s, now, order);
   if (Array.isArray(s.ul)) drawUlt(s, now);
   if (Array.isArray(s.dx)) drawDomain(s, now);
   // closing ring: pulsing red, unlit so nobody misses it
@@ -1846,7 +2514,7 @@ function drawGame(s, dt, now){
   }
 
   // aim mode for the secret finisher: my reach as a faint box, targets bracketed
-  if (aim && now < aim.until && !Array.isArray(s.ul) && !Array.isArray(s.dx)) {
+  if (aim && now < aim.until && !replaying && !Array.isArray(s.ul) && !Array.isArray(s.dx)) {
     const mine = order.find(o => o.i === me), targets = aimTargets();
     if (mine) {
       const R = T.ULT_REACH, x0 = (Math.round(mine.x) - R) * TS, y0 = (Math.round(mine.y) - R) * TS, side = (2 * R + 1) * TS;
@@ -1975,6 +2643,83 @@ function slashSound(){
   src.connect(g).connect(AC.destination); src.start();
 }
 
+// ---- Frozen Hour: a ring of inverted color bursts out of the caster, the world drains to cold grey under a
+// giant clock face, and only the caster keeps their color. ----
+let tsLocal = null;
+function drawStop(s, now, order){
+  const [a, tt] = s.ts.map(Number), t = (tt || 0) / 100, key = s.rd + ':' + a;
+  if (!tsLocal || tsLocal.key !== key) { tsLocal = {key, tick: -1}; rumble(.9, 200, .7, 3000); blip(110); }
+  const tick = Math.floor(t * 2); if (tick !== tsLocal.tick && t < T.STOP_TIME - .3) { tsLocal.tick = tick; clockTick(); }
+  const me = order.find(o => o.i === a), cx = me ? me.x * TS + 8 : BW / 2, cy = me ? me.y * TS + 6 : BH / 2;
+  const k = t < .35 ? t / .35 : t > T.STOP_TIME - .35 ? (T.STOP_TIME - t) / .35 : 1;
+  b.save();
+  b.globalAlpha = Math.max(0, k); b.globalCompositeOperation = 'saturation'; b.fillStyle = '#808080'; b.fillRect(0, 0, BW, BH);
+  b.globalCompositeOperation = 'multiply'; b.fillStyle = '#b0c0ff'; b.fillRect(0, 0, BW, BH);
+  b.globalCompositeOperation = 'source-over'; b.globalAlpha = .22 * k;   // the clock
+  const R = Math.min(BW, BH) * .42;
+  b.fillStyle = '#e9f0ff';
+  for (let h = 0; h < 12; h++) { const an = h / 12 * 6.283; b.fillRect(Math.round(BW / 2 + Math.cos(an) * R) - 1, Math.round(BH / 2 + Math.sin(an) * R) - 1, h % 3 ? 2 : 4, h % 3 ? 2 : 4); }
+  for (const [len, sp] of [[R * .9, now / 1000 * 6.283 / 2], [R * .55, -1.2]]) {
+    for (let r = 0; r < len; r += 1.5) b.fillRect(Math.round(BW / 2 + Math.cos(sp - 1.571) * r), Math.round(BH / 2 + Math.sin(sp - 1.571) * r), 2, 2);
+  }
+  b.globalAlpha = 1;
+  if (me) drawChar(charSprite(me.ch, a, 0, 0), Math.round(me.x * TS), Math.round(me.y * TS) - 3, anim[a].flip);   // the caster, in color
+  if (t < .6) {   // the burst
+    const r = t / .6 * Math.hypot(BW, BH);
+    b.globalAlpha = 1 - t / .6; b.strokeStyle = '#ffffff'; b.lineWidth = 3; b.beginPath(); b.arc(cx, cy, r, 0, 6.283); b.stroke();
+    b.strokeStyle = '#9fe8ff'; b.lineWidth = 1; b.beginPath(); b.arc(cx, cy, Math.max(0, r - 5), 0, 6.283); b.stroke();
+  }
+  b.restore();
+}
+function clockTick(){
+  if (!AC || AC.state !== 'running') return;
+  const o = AC.createOscillator(), g = AC.createGain(), t = AC.currentTime;
+  o.type = 'square'; o.frequency.value = 1900; g.gain.setValueAtTime(.06, t); g.gain.exponentialRampToValueAtTime(.001, t + .03);
+  o.connect(g).connect(AC.destination); o.start(t); o.stop(t + .04);
+}
+// ---- Void Lance: violet sparks gather on the caster while the band it will sweep flickers, then a beam 3 tiles
+// wide tears straight across the map, walls and all. ----
+let lnLocal = null;
+function drawLance(s, now){
+  const [a, d, tt, x0, y0] = s.ln, t = (+tt || 0) / 100, key = s.rd + ':' + a;
+  if (!DIR[d] || !(a >= 0 && a < 4)) return;
+  if (!lnLocal || lnLocal.key !== key) { lnLocal = {key, fired: false}; whine(); }
+  const cells = lanceBand(+x0, +y0, d), cx = x0 * TS + 8, cy = y0 * TS + 7;
+  if (t < T.LANCE_WIND) {
+    const k = t / T.LANCE_WIND;
+    const on = ((now / (130 - k * 90)) | 0) & 1, [dx] = DIR[d];
+    b.fillStyle = `rgba(185,103,255,${(on ? .3 : .14) + k * .3})`;
+    for (const i of cells) b.fillRect((i % W) * TS, ((i / W) | 0) * TS, TS, TS);
+    b.fillStyle = on ? '#e0c8ff' : '#b967ff';   // the band's edges
+    for (const i of cells) {
+      const X = (i % W) * TS, Y = ((i / W) | 0) * TS, side = dx ? ((i / W) | 0) - y0 : i % W - x0;
+      if (side) dx ? b.fillRect(X, side < 0 ? Y : Y + TS - 1, TS, 1) : b.fillRect(side < 0 ? X : X + TS - 1, Y, 1, TS);
+    }
+    for (let n = 0; n < 16; n++) {   // sparks pulled in to the caster
+      const an = n * 2.4 + now / 300, r = 26 * (1 - ((k * 3 + n / 16) % 1));
+      b.fillStyle = n & 1 ? '#ffffff' : '#b967ff'; b.fillRect(Math.round(cx + Math.cos(an) * r), Math.round(cy + Math.sin(an) * r), 1, 1);
+    }
+  } else {
+    if (!lnLocal.fired) { lnLocal.fired = true; boom(); rumble(.8, 900, .8, 120); shake = reduce ? 0 : .45; flash = now + 60; }
+    const k = (t - T.LANCE_WIND) / T.LANCE_FIRE, fade = Math.max(0, 1 - k * k);
+    const [dx, dy] = DIR[d];
+    b.globalAlpha = fade;
+    for (const i of cells) {
+      const X = (i % W) * TS, Y = ((i / W) | 0) * TS, side = dx ? ((i / W) | 0) - y0 : i % W - x0;
+      b.fillStyle = side ? '#7a3ad0' : '#d8b8ff'; b.fillRect(X, Y, TS, TS);
+      if (!side) { b.fillStyle = '#ffffff'; dx ? b.fillRect(X, Y + 4 + (((now / 40) | 0) & 1), TS, 6) : b.fillRect(X + 4 + (((now / 40) | 0) & 1), Y, 6, TS); }
+      else if (hash(i, (now / 50) | 0, 2) < .5) { b.fillStyle = '#b967ff'; dx ? b.fillRect(X, side < 0 ? Y : Y + TS - 2, TS, 2) : b.fillRect(side < 0 ? X : X + TS - 2, Y, 2, TS); }
+    }
+    b.globalAlpha = 1;
+  }
+}
+function whine(){
+  if (!AC || AC.state !== 'running') return;
+  const o = AC.createOscillator(), g = AC.createGain(), t = AC.currentTime;
+  o.type = 'sawtooth'; o.frequency.setValueAtTime(180, t); o.frequency.exponentialRampToValueAtTime(1600, t + T.LANCE_WIND);
+  g.gain.setValueAtTime(.001, t); g.gain.exponentialRampToValueAtTime(.08, t + T.LANCE_WIND * .9); g.gain.exponentialRampToValueAtTime(.001, t + T.LANCE_WIND + .05);
+  o.connect(g).connect(AC.destination); o.start(t); o.stop(t + T.LANCE_WIND + .1);
+}
 // ---- Secret finisher cinematic, drawn over the field at art resolution ----------
 let ulLocal = null;
 function drawUlt(s, now){
@@ -2023,8 +2768,6 @@ const GLYPHS = '#@%&*+=$01/\\<>?!';
 const RAMP = ' .:-=+*#%@';
 let bursts = [];
 const psy = {on: false, t0: 0, x: 0, y: 0, hue: 0, sample: null, sampleT: 0};
-const hash = (a, c, e) => { let h = (Math.imul(a, 374761393) + Math.imul(c, 668265263) + Math.imul(e, 1274126177)) | 0;
-  h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
 const chR = cnv(BW, BH), rcx = chR.getContext('2d'), chC = cnv(BW, BH), ccx = chC.getContext('2d');
 
 function spawnDust(x, y, dx, dy){
@@ -2139,6 +2882,9 @@ function renderHud(s){
     const sp = document.createElement('span'); sp.textContent = (i === mySlot() ? 'You' : cleanName(st[0]) || CNAMES[i]) + (ps[i] && (ps[i][6] & 1) ? ' ↻' : '');
     const pips = document.createElement('div'); pips.className = 'pips';
     for (let k = 0; k < T.WINS; k++) { const p = document.createElement('u'); if (k < (+w[i] || 0)) p.style.background = COLORS[i]; pips.append(p); }
+    const fl = Array.isArray(ps[i]) && ps[i][2] ? +ps[i][6] : 0;   // power-ups held: kick, pierce, line bomb, shield
+    for (const [bit, ch, col] of [[16, 'K', '#7dff6a'], [32, 'P', '#b967ff'], [64, 'L', '#fcee0a'], [8, 'S', '#9fe8ff']])
+      if (fl & bit) { const e = document.createElement('b'); e.textContent = ch; e.style.color = col; pips.append(e); }
     txt.append(sp, pips);
     el.append(portrait(chOf(st[4]), i), txt); return el;
   };
@@ -2148,6 +2894,13 @@ function renderHud(s){
   hud.append(chip(0), chip(1), c, chip(2), chip(3));
 }
 let bannerKey = '', lastCount = 0;
+const teamsOn = () => !!(snap && Array.isArray(snap.o) && snap.o[8]);
+// "Cyan + Yellow", or "Your team", for whoever is on seat i's side.
+function sideName(i, seats, nameOf){
+  if (!teamsOn()) return i === mySlot() ? 'You' : nameOf(i);
+  if (mySlot() >= 0 && (mySlot() & 1) === (i & 1)) return 'Your team';
+  return [0, 1, 2, 3].filter(k => (k & 1) === (i & 1) && seats[k]).map(nameOf).join(' + ');
+}
 function renderBanner(s){
   const seats = Array.isArray(s.seat) ? s.seat : [];
   const nameOf = i => i === mySlot() ? 'You' : (seats[i] && cleanName(seats[i][0])) || CNAMES[i];
@@ -2157,6 +2910,10 @@ function renderBanner(s){
     if (n !== lastCount) { lastCount = n; blip(440); }
   } else if (s.ph === 'play' && Array.isArray(s.dx)) {
     const a = +s.dx[0]; sub = (a === mySlot() ? 'Your' : nameOf(a) + "'s") + ' domain expansion'; text = 'CRIMSON SHRINE'; color = '#ff2a5a';
+  } else if (s.ph === 'play' && Array.isArray(s.ts)) {
+    const a = +s.ts[0]; sub = a === mySlot() ? 'you stopped time' : nameOf(a) + ' stopped time'; text = 'FROZEN HOUR'; color = '#9fe8ff';
+  } else if (s.ph === 'play' && Array.isArray(s.ln)) {
+    const a = +s.ln[0]; sub = (a === mySlot() ? 'you' : nameOf(a)) + (s.ln[2] / 100 < T.LANCE_WIND ? ' charge' + (a === mySlot() ? '' : 's') : ' fire' + (a === mySlot() ? '' : 's')); text = 'VOID LANCE'; color = '#b967ff';
   } else if (s.ph === 'play' && Array.isArray(s.ul)) {
     const a = +s.ul[0], v = +s.ul[1], stage = +s.ul[3];
     if (stage === 2) { sub = v === mySlot() ? 'make ' + T.DODGE_GOAL : nameOf(v) + ' tries to dodge'; text = 'DODGE?'; color = '#fcee0a'; }
@@ -2170,21 +2927,143 @@ function renderBanner(s){
     else if (s.hd > 0) { sub = 'respawn chance'; text = String(Math.ceil(s.hd / 10)); color = '#fcee0a'; }
   }
   else if (s.ph === 'round') {
-    if (s.last >= 0) { text = s.last === mySlot() ? 'Round is yours' : nameOf(s.last) + ' takes it'; color = COLORS[s.last]; }
+    if (s.last >= 0) { const sn = sideName(s.last, seats, nameOf); text = sn === 'You' ? 'Round is yours' : sn + (teamsOn() && sn !== 'Your team' ? ' take it' : ' takes it'); color = COLORS[s.last]; }
     else text = 'Draw';
   }
   const key = text + sub + color; if (key === bannerKey) return; bannerKey = key;
-  const bn = $('banner'); bn.textContent = ''; bn.style.color = color; bn.classList.toggle('top', s.ph === 'play' && (Array.isArray(s.ul) || Array.isArray(s.dx)));
+  const bn = $('banner'); bn.textContent = ''; bn.style.color = color; bn.classList.toggle('top', s.ph === 'play' && (Array.isArray(s.ul) || Array.isArray(s.dx) || Array.isArray(s.ts) || Array.isArray(s.ln)));
   if (sub) { const sm = document.createElement('small'); sm.textContent = sub; bn.append(sm); }
   bn.append(text);
   $('over').hidden = s.ph !== 'match';
   if (s.ph === 'match') {
     const c = +s.champ;
-    $('overTitle').textContent = c === mySlot() ? 'You win the match' : nameOf(c) + ' wins the match';
+    const sn = sideName(c, seats, nameOf);
+    $('overTitle').textContent = sn === 'You' ? 'You win the match' : sn + (teamsOn() && sn !== 'Your team' ? ' win the match' : ' wins the match');
     $('overTitle').style.color = COLORS[c] || '#e9e4f5';
     $('overSub').textContent = (Array.isArray(s.w) ? s.w : []).map((n, i) => seats[i] ? nameOf(i) + ' ' + n : '').filter(Boolean).join(' · ');
     $('overHost').hidden = !(NET.role === 'host' || NET.role === 'solo');
+    const box = $('awards'); box.textContent = '';
+    for (const a of Array.isArray(s.aw) ? s.aw : []) {
+      const [title, i, detail] = a; if (!seats[i]) continue;
+      const row = document.createElement('div'); row.className = 'award'; row.style.setProperty('--c', COLORS[i]);
+      const tx = document.createElement('div'), t = document.createElement('b'), d = document.createElement('span');
+      t.textContent = title; d.textContent = nameOf(i) + ' · ' + detail; tx.append(t, d);
+      row.append(portrait(chOf(seats[i][4]), i), tx); box.append(row);
+    }
   }
+}
+// ---- Result card: a picture of the match result for the group chat ----
+function resultCard(s){
+  const seats = Array.isArray(s.seat) ? s.seat : [], w = Array.isArray(s.w) ? s.w : [], c = +s.champ, CW = 720, CH = 960;
+  const nameOf = i => (seats[i] && cleanName(seats[i][0])) || CNAMES[i];
+  const cvs = cnv(CW, CH), g = cvs.getContext('2d'); g.imageSmoothingEnabled = false;
+  const gr = g.createLinearGradient(0, 0, 0, CH); gr.addColorStop(0, '#1a0710'); gr.addColorStop(1, '#07060b'); g.fillStyle = gr; g.fillRect(0, 0, CW, CH);
+  for (let y = 0; y < CH; y += 4) { g.fillStyle = 'rgba(255,255,255,.015)'; g.fillRect(0, y, CW, 1); }
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = '700 64px Silkscreen, monospace';
+  for (const [dx, col] of [[-4, '#2de2e6'], [4, '#ff2a6d'], [0, '#e9e4f5']]) { g.fillStyle = col; g.fillText('BLAST LANES', CW / 2 + dx, 80); }
+  const col = COLORS[c] || '#e9e4f5';
+  g.fillStyle = rgba(col, .18); g.fillRect(CW / 2 - 130, 150, 260, 260);
+  g.strokeStyle = col; g.lineWidth = 4; g.strokeRect(CW / 2 - 130, 150, 260, 260);
+  if (seats[c]) g.drawImage(charSprite(chOf(seats[c][4]), c, 0, 0), CW / 2 - 105, 160, 14 * 15, 16 * 15);
+  const champ = teamsOn() ? [0, 1, 2, 3].filter(k => (k & 1) === (c & 1) && seats[k]).map(nameOf).join(' + ') : nameOf(c);
+  g.font = '700 40px Silkscreen, monospace'; g.fillStyle = col;
+  let fs = 40; while (g.measureText(champ.toUpperCase()).width > CW - 60 && fs > 18) { fs -= 2; g.font = `700 ${fs}px Silkscreen, monospace`; }
+  g.fillText(champ.toUpperCase(), CW / 2, 460);
+  g.font = '400 34px VT323, monospace'; g.fillStyle = '#e9e4f5'; g.fillText(teamsOn() ? 'win the match' : 'wins the match', CW / 2, 505);
+  g.font = '400 30px VT323, monospace'; g.fillStyle = '#7d7396';
+  g.fillText(seats.map((st, i) => st ? nameOf(i) + ' ' + (+w[i] || 0) : '').filter(Boolean).join('   ·   '), CW / 2, 555);
+  let y = 610;
+  for (const [title, i, detail] of (Array.isArray(s.aw) ? s.aw : []).slice(0, 5)) {
+    if (!seats[i]) continue;
+    g.fillStyle = '#100d18'; g.fillRect(60, y, CW - 120, 58); g.fillStyle = COLORS[i]; g.fillRect(60, y, 6, 58);
+    g.drawImage(charSprite(chOf(seats[i][4]), i, 0, 0), 80, y + 5, 42, 48);
+    g.textAlign = 'left'; g.font = '700 16px Silkscreen, monospace'; g.fillStyle = '#fcee0a'; g.fillText(title.toUpperCase(), 140, y + 18);
+    g.font = '400 28px VT323, monospace'; g.fillStyle = '#e9e4f5'; g.fillText(nameOf(i) + ' · ' + detail, 140, y + 41);
+    y += 66;
+  }
+  g.textAlign = 'center'; g.font = '400 24px VT323, monospace'; g.fillStyle = '#4d4560';
+  g.fillText(new Date().toLocaleDateString() + (location.host ? ' · ' + location.host : ''), CW / 2, CH - 30);
+  return cvs;
+}
+async function shareResult(){
+  if (!snap || snap.ph !== 'match') return;
+  const blob = await new Promise(res => resultCard(snap).toBlob(res, 'image/png'));
+  if (!blob) return toast("Couldn't make the picture.");
+  const file = new File([blob], 'blast-lanes-result.png', {type: 'image/png'});
+  try {
+    if (navigator.canShare && navigator.canShare({files: [file]})) { await navigator.share({files: [file], title: 'Blast Lanes'}); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'blast-lanes-result.png';
+  document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  toast('Result saved as a picture.');
+}
+// ---- Killcam: every phone keeps the last few seconds of snapshots; when a round ends on a kill, it replays the
+// run-up in slow motion and freezes on the hit with the killer's name splashed across the screen. ----
+const camBuf = [];
+let cam = null, camDone = '';
+function camRecord(s, now){
+  if (s.ph !== 'play' && s.ph !== 'round') return;
+  const last = camBuf[camBuf.length - 1];
+  if (last && last.s === s) return;
+  if (last && last.s.rd !== s.rd) camBuf.length = 0;
+  camBuf.push({t: now, s});
+  while (camBuf.length && now - camBuf[0].t > 12000) camBuf.shift();
+}
+const aliveIn = (s, v) => Array.isArray(s.p) && Array.isArray(s.p[v]) && !!s.p[v][2];
+function camStart(s, now){
+  const [v, k, c] = s.kc.map(Number), key = s.rd + ':' + v + ':' + k;
+  if (camDone === key || !(v >= 0 && v < 4)) return false;
+  camDone = key;
+  let death = -1;
+  for (let j = camBuf.length - 1; j > 0; j--) if (aliveIn(camBuf[j - 1].s, v) && !aliveIn(camBuf[j].s, v)) { death = camBuf[j].t; break; }
+  if (death < 0) return false;
+  const start = Math.max(camBuf[0].t, death - 1400), end = Math.min(camBuf[camBuf.length - 1].t, death + 320);
+  cam = {v, k, c, start, death, end, t0: now, frames: camBuf.slice(), seats: s.seat};
+  endPsy(); hitstop = 0;
+  return true;
+}
+function camDraw(dt, now){
+  const c = cam, SLOW = .45, FREEZE = 1000, e = now - c.t0, pre = (c.death - c.start) / SLOW;
+  let rt, frozen = 0;
+  if (e < pre) rt = c.start + e * SLOW;
+  else if (e < pre + FREEZE) { rt = c.death; frozen = Math.max(.001, (e - pre) / FREEZE); }
+  else rt = c.death + (e - pre - FREEZE) * SLOW;
+  if (rt > c.end) { cam = null; return; }
+  let f = c.frames[0];
+  for (const fr of c.frames) { if (fr.t <= rt) f = fr; else break; }
+  replaying = true;
+  try { drawGame(f.s, frozen ? 0 : dt * SLOW, now); } finally { replaying = false; }
+  camOverlay(now, frozen, c);
+}
+function camOverlay(now, frozen, c){
+  const Wd = cv.width, Hd = cv.height, u = Wd / 100, seats = Array.isArray(c.seats) ? c.seats : [];
+  const NAME = i => (i === mySlot() ? 'YOU' : (seats[i] && cleanName(seats[i][0])) || CNAMES[i]).toUpperCase();
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,42,90,.07)'; ctx.fillRect(0, 0, Wd, Hd);
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, Wd, Hd * .07); ctx.fillRect(0, Hd * .93, Wd, Hd * .07);
+  ctx.font = `700 ${Math.round(u * 4)}px Silkscreen, monospace`; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  if (((now / 400) | 0) & 1) { ctx.fillStyle = '#ff2a5a'; ctx.beginPath(); ctx.arc(u * 4, Hd * .035, u * 1.3, 0, 7); ctx.fill(); }
+  ctx.fillStyle = '#fff'; ctx.fillText('REPLAY', u * 7, Hd * .037);
+  ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(255,255,255,.55)'; ctx.fillText(TOUCH ? 'TAP TO SKIP' : 'SPACE TO SKIP', Wd - u * 3, Hd * .965);
+  if (frozen) {
+    if (frozen < .08) { ctx.fillStyle = `rgba(255,255,255,${(1 - frozen / .08) * .6})`; ctx.fillRect(0, 0, Wd, Hd); }
+    let big, small, col = c.k >= 0 ? COLORS[c.k] : '#ff2a5a';
+    if (c.k >= 0 && c.k !== c.v) { big = NAME(c.k); small = (c.c === 3 ? 'VOID LANCED ' : 'TOOK OUT ') + NAME(c.v); }
+    else if (c.k === c.v) { big = NAME(c.v); small = 'SELF-DESTRUCT'; col = COLORS[c.v]; }
+    else { big = c.c === 2 ? 'LASERED' : 'CRUSHED'; small = NAME(c.v); }
+    const sc = 1 + Math.max(0, .25 - frozen) * 2.4;
+    ctx.translate(Wd / 2, Hd * .44); ctx.rotate(-.1); ctx.scale(sc, sc);
+    ctx.fillStyle = 'rgba(0,0,0,.82)'; ctx.fillRect(-Wd * .7, -u * 13, Wd * 1.4, u * 26);
+    ctx.fillStyle = col; ctx.fillRect(-Wd * .7, -u * 13, Wd * 1.4, u * 1.2); ctx.fillRect(-Wd * .7, u * 11.8, Wd * 1.4, u * 1.2);
+    let fs = u * 13; ctx.font = `700 ${fs}px Silkscreen, monospace`; ctx.textAlign = 'center';
+    const wdt = ctx.measureText(big).width; if (wdt > Wd * .86) { fs *= Wd * .86 / wdt; ctx.font = `700 ${fs}px Silkscreen, monospace`; }
+    ctx.fillStyle = '#2de2e6'; ctx.fillText(big, -u * .8, -u * 2.5); ctx.fillStyle = '#ff2a6d'; ctx.fillText(big, u * .8, -u * 2.5);
+    ctx.lineWidth = u * 1.1; ctx.strokeStyle = '#000'; ctx.strokeText(big, 0, -u * 2.5);
+    ctx.fillStyle = ((now / 90) | 0) & 1 ? col : '#ffffff'; ctx.fillText(big, 0, -u * 2.5);
+    ctx.font = `400 ${Math.round(u * 5)}px VT323, monospace`; ctx.fillStyle = '#fff'; ctx.fillText(small, 0, u * 7);
+  }
+  ctx.restore();
 }
 function present(s, dt, now){
   const seats = Array.isArray(s.seat) ? s.seat : [];
@@ -2193,13 +3072,18 @@ function present(s, dt, now){
   lobbyKey = '';
   const dm = Array.isArray(s.dm) ? s.dm.map(Number) : [11, 13];
   if (dm.every(v => Number.isInteger(v) && v >= 5 && v <= 21)) setDims(dm[0], dm[1]);
+  if (!cam) camRecord(s, now);
+  if (cam || (s.ph === 'round' && Array.isArray(s.kc) && camStart(s, now))) {
+    show('game'); camDraw(dt, now); renderHud(s); renderBanner(s); $('banner').style.visibility = cam ? 'hidden' : ''; return;
+  }
+  $('banner').style.visibility = '';
   show('game'); drawGame(s, dt, now); renderHud(s); renderBanner(s); syncRespawn(s, now); syncDodge(s, now);
   if (s.ph === 'count' && Array.isArray(s.o) && s.o[0]) prefetchRace();
   if (!TOUCH && !keysToastShown && s.ph === 'count') { keysToastShown = true; toast('Move with the arrow keys or WASD. Space or click drops a bomb.'); }
   const watching = NET.role === 'client' && mySlot() < 0;
   if (watching !== $('hintText').classList.contains('watching')) {
     $('hintText').classList.toggle('watching', watching);
-    if (watching) $('hintText').textContent = "Watching. You'll get a seat next match.";
+    if (watching) $('hintText').textContent = NET.tv ? 'TV · join with code ' + NET.code : "Watching. You'll get a seat next match.";
     else $('hintText').innerHTML = HINT_HTML;
   }
 }
@@ -2509,6 +3393,16 @@ function flatline(){
   gain.gain.setValueAtTime(.12, t); gain.gain.exponentialRampToValueAtTime(.001, t + 1);
   o.connect(gain).connect(AC.destination); o.start(); o.stop(t + 1);
 }
+// Filtered noise, for thunder and whooshes.
+function rumble(dur, freq, vol, sweepTo){
+  if (!AC || AC.state !== 'running') return;
+  const t = AC.currentTime, n = Math.floor(AC.sampleRate * dur), buf = AC.createBuffer(1, n, AC.sampleRate), d = buf.getChannelData(0);
+  let v = 0; for (let i = 0; i < n; i++) { v += (Math.random() * 2 - 1 - v) * .2; d[i] = v * Math.pow(1 - i / n, 1.6) * (i < 400 ? i / 400 : 1); }
+  const src = AC.createBufferSource(), lp = AC.createBiquadFilter(), g = AC.createGain();
+  src.buffer = buf; lp.type = 'lowpass'; lp.frequency.setValueAtTime(freq, t); if (sweepTo) lp.frequency.exponentialRampToValueAtTime(sweepTo, t + dur);
+  g.gain.value = vol; src.connect(lp).connect(g).connect(AC.destination); src.start();
+}
+const thunder = () => rumble(2.4, 220, .9);
 function wakeLock(){ try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch {} }
 
 // ---- Bug reports ----------------------------------------------------------------
