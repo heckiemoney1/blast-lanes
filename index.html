@@ -794,7 +794,7 @@ function encode(){
   s.tm = Math.ceil(S.time * 10); s.cd = Math.ceil(S.cd * 10); s.bx = S.boom;
   // flags: 1 racing, 2 may start a race, 4 spawn shield. Last field: race seconds left (tenths).
   s.p = S.players.map(p => p ? [Math.round(p.x * 100), Math.round(p.y * 100), p.alive ? 1 : 0, p.bombs, p.range, p.face,
-    (p.racing ? 1 : 0) | (canRace(p, live) ? 2 : 0) | (p.inv > 0 ? 4 : 0), p.racing ? Math.ceil(p.raceLeft * 10) : 0] : 0);
+    (p.racing ? 1 : 0) | (canRace(p, live) ? 2 : 0) | (p.inv > 0 ? 4 : 0), p.racing ? Math.ceil(p.raceLeft * 10) : 0, Math.round(p.speed * 10)] : 0);
   s.b = S.bombs.map(b => [b.x, b.y, Math.round(b.t * 100)]);
   s.f = []; for (let i = 0; i < N; i++) if (S.fl[i] > 0) s.f.push(i, Math.round(S.fl[i] * 100));
   s.u = S.ups.flatMap(u => [u.i, u.t]);
@@ -858,15 +858,16 @@ function relayNet(){
     // backlog. The host's game state goes at QoS 0 (only the latest matters); a player's inputs go at QoS 1.
     let busy = 0, again = false;
     const publish = () => {
+      if (!mine$.s) { stats.tx++; c.publish(mine, JSON.stringify(mine$), {qos: 1, retain: true}); return; }   // a player's inputs: send now
       if (busy && performance.now() - busy < 3000) { again = true; stats.drop++; return; }
       busy = performance.now(); again = false; stats.tx++;
-      c.publish(mine, JSON.stringify(mine$), {qos: mine$.s ? 0 : 1, retain: true}, () => { busy = 0; if (again) publish(); });
+      c.publish(mine, JSON.stringify(mine$), {qos: 0, retain: true}, () => { busy = 0; if (again) publish(); });
     };
     c.on('connect', () => { busy = 0; if (Object.keys(mine$).length) publish(); });   // after a reconnect, say we're still here
     await new Promise(res => c.subscribe(base + '/p/+', v5 ? {qos: 1, nl: true} : {qos: 1}, () => res()));
     await new Promise(r => setTimeout(r, 900));   // retained presences arrive right after subscribing
     return {
-      name, url, stats, hz: 12, hub: ![...pres.keys()].some(k => k !== id),   // hub: nobody else was in this room
+      name, url, stats, hz: 15, hub: ![...pres.keys()].some(k => k !== id),   // hub: nobody else was in this room
       peers: () => list,
       async presence(patch){
         mine$ = Object.assign({}, mine$);
@@ -1034,6 +1035,52 @@ function sendAct(a){
   if (NET.role !== 'client' || mySlot() < 0) return;
   NET.pend.push([++NET.seq, a]); NET.pend = NET.pend.slice(-12);
   NET.game.presence({a: NET.pend}).catch(() => {});
+  if (pred.on) {
+    if (DIR[a] && pred.q.length < T.QUEUE) pred.q.push(a);
+    if (a === 'b') ghostBombs.push({i: Math.round(pred.y) * W + Math.round(pred.x), t0: performance.now()});
+  }
+}
+
+// ---- Prediction (guests only): your own fighter steps the moment you swipe, using the same rules the host
+// uses, against the latest snapshot. The host stays in charge: once it has settled on a tile somewhere else
+// (say a bomb landed in your path), your fighter slides over to where the host has it. ----
+const pred = {on: false, x: 0, y: 0, tx: 0, ty: 0, moving: false, q: [], rd: -1, hx: -1, hy: -1, hSince: 0};
+let ghostBombs = [];   // your bombs, shown at once until the host's real ones arrive
+function predStep(s, dt, now){
+  const me = mySlot(), p = Array.isArray(s.p) ? s.p[me] : null;
+  if (NET.role !== 'client' || me < 0 || !Array.isArray(p) || !p[2] || s.ph !== 'play' || Array.isArray(s.ul) || Array.isArray(s.dx) || typeof s.g !== 'string') {
+    pred.on = false; return;
+  }
+  const hx = p[0] / 100, hy = p[1] / 100;
+  if (!pred.on || pred.rd !== s.rd || Math.abs(pred.x - hx) + Math.abs(pred.y - hy) > 3) {
+    Object.assign(pred, {on: true, x: Math.round(hx), y: Math.round(hy), moving: false, q: [], rd: s.rd});
+    pred.tx = pred.x; pred.ty = pred.y;
+  }
+  const bombs = new Set((Array.isArray(s.b) ? s.b : []).map(b => b[1] * W + b[0])), g = s.g;
+  const open = i => g[i] === '0' && !bombs.has(i);
+  let rem = ((+p[8] || T.SPEED * 10) / 10) * dt;
+  while (rem > 0) {
+    if (!pred.moving) {
+      if (!pred.q.length) break;
+      const [dx, dy] = DIR[pred.q.shift()], nx = pred.x + dx, ny = pred.y + dy;
+      if (!open(ny * W + nx)) continue;
+      pred.tx = nx; pred.ty = ny; pred.moving = true;
+    }
+    const dist = Math.abs(pred.tx - pred.x) + Math.abs(pred.ty - pred.y), m = Math.min(rem, dist);
+    pred.x += Math.sign(pred.tx - pred.x) * m; pred.y += Math.sign(pred.ty - pred.y) * m; rem -= m;
+    if (m >= dist - 1e-9) { pred.x = pred.tx; pred.y = pred.ty; pred.moving = false; }
+  }
+  // Reconcile: when we're idle with nothing unconfirmed and the host has held one tile for a moment, match it.
+  if (hx !== pred.hx || hy !== pred.hy) { pred.hx = hx; pred.hy = hy; pred.hSince = now; }
+  const hostStill = Number.isInteger(hx) && Number.isInteger(hy) && now - pred.hSince > 180;
+  if (!pred.moving && !pred.q.length && !NET.pend.length && hostStill && (pred.x !== hx || pred.y !== hy)) {
+    const k = 1 - Math.exp(-dt * 14);
+    pred.x += (hx - pred.x) * k; pred.y += (hy - pred.y) * k;
+    if (Math.abs(pred.x - hx) + Math.abs(pred.y - hy) < .02) { pred.x = hx; pred.y = hy; }
+    pred.tx = Math.round(pred.x); pred.ty = Math.round(pred.y);
+  }
+  const real = new Set((Array.isArray(s.b) ? s.b : []).map(b => b[1] * W + b[0]));
+  ghostBombs = ghostBombs.filter(gb => now - gb.t0 < 1000 && !real.has(gb.i));
 }
 
 // ---- Pixel art -------------------------------------------------------------------
@@ -1594,6 +1641,7 @@ function drawGame(s, dt, now){
     b.fillStyle = OUT; b.fillRect(X + 2, Y + 3, 12, 11);
     b.drawImage(img, X + 2, Y + 2 + bob);
   }
+  for (const gb of ghostBombs) { b.globalAlpha = .55; b.drawImage(BOMB[0], (gb.i % W) * TS + 2, ((gb.i / W) | 0) * TS + 3, 12, 12); b.globalAlpha = 1; }
   for (const bm of Array.isArray(s.b) ? s.b : []) {
     const t = bm[2] / 100, hot = t < .8 && ((now / 90) | 0) & 1, sq = reduce ? 0 : ((now / 140) | 0) & 1;
     const X = bm[0] * TS + 2, Y = bm[1] * TS + 3;
@@ -1615,7 +1663,8 @@ function drawGame(s, dt, now){
     const p = ps[i], A = anim[i];
     if (!Array.isArray(p)) { disp[i] = null; A.alive = false; continue; }
     let x = p[0] / 100, y = p[1] / 100;
-    if (remote) {
+    if (remote && i === me && pred.on) { x = pred.x; y = pred.y; disp[i] = {x, y}; }
+    else if (remote) {
       const d = disp[i];
       if (!d || Math.abs(d.x - x) + Math.abs(d.y - y) > 2) disp[i] = {x, y};
       else { const k = 1 - Math.exp(-dt * 22); d.x += (x - d.x) * k; d.y += (y - d.y) * k; }
@@ -2400,7 +2449,7 @@ function frame(now){
       acc += dt; while (acc >= STEP) { update(STEP); acc -= STEP; }
       snap = encode();
       if (NET.game) hostSend(dt);
-    } else if (NET.role === 'client' && NET.game) clientSync(now);
+    } else if (NET.role === 'client' && NET.game) { clientSync(now); if (snap) predStep(snap, dt, now); }
     if (NET.role && snap) present(snap, dt, now);
     else if (NET.role === 'client') show('home');
   } catch (err) { console.error(err); }
