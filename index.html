@@ -229,7 +229,7 @@
   <div class="card">
     <div>
       <h1 class="logo" aria-label="Blast Lanes">BLAST<br><span>LANES</span><i class="g" aria-hidden="true">BLAST<br>LANES</i></h1>
-      <p class="tag">&gt; 2–4 players, one phone each<br>&gt; <b>swipe</b> = 1 tile · <b>tap</b> = bomb · first to 3 <i class="cursor"></i></p>
+      <p class="tag" id="tag">&gt; 2–4 players, one phone each<br>&gt; <b>swipe</b> = 1 tile · <b>tap</b> = bomb · first to 3 <i class="cursor"></i></p>
     </div>
     <div>
       <div class="charhead"><span class="lbl">// Pick your fighter</span><div class="tabs" id="charTabs"></div></div>
@@ -1885,6 +1885,7 @@ function present(s, dt, now){
   const dm = Array.isArray(s.dm) ? s.dm.map(Number) : [11, 13];
   if (dm.every(v => Number.isInteger(v) && v >= 5 && v <= 21)) setDims(dm[0], dm[1]);
   show('game'); drawGame(s, dt, now); renderHud(s); renderBanner(s); syncRespawn(s, now); syncDodge(s, now);
+  if (!TOUCH && !keysToastShown && s.ph === 'count') { keysToastShown = true; toast('Move with the arrow keys or WASD. Space or click drops a bomb.'); }
   const watching = NET.role === 'client' && mySlot() < 0;
   if (watching !== $('hintText').classList.contains('watching')) {
     $('hintText').classList.toggle('watching', watching);
@@ -1892,7 +1893,14 @@ function present(s, dt, now){
     else $('hintText').innerHTML = HINT_HTML;
   }
 }
+// On a computer the controls are keys, not swipes: say so wherever the touch controls are described.
+const TOUCH = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+if (!TOUCH) {
+  $('hintText').innerHTML = '<b>arrows</b>/<b>WASD</b> step · <b>space</b>/<b>click</b> bomb';
+  $('tag').insertAdjacentHTML('beforeend', '<br>&gt; on a computer: <b>arrows/WASD</b> move · <b>space</b> = bomb');
+}
 const HINT_HTML = $('hintText').innerHTML;
+let keysToastShown = false;
 
 // ---- Dodging the finisher: half a second to hit JUMP!, then 5 seconds of 2048 to reach 128 ----
 let qte = null, g2048 = null;
