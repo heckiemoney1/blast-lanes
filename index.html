@@ -218,6 +218,11 @@
   .opt.slide input{flex:1; min-width:0; padding:0; border:0; background:none; accent-color:var(--hot); height:24px}
   .opt.slide b{white-space:nowrap; font-size:11px}
   .opt.slide input:focus{outline:none}
+  .opt.slide select{flex:1; min-width:0; background:var(--panel2); color:var(--cyan); border:1px solid var(--edge); border-radius:0;
+    font:700 11px var(--pix); text-transform:uppercase; padding:6px 8px; text-align:right}
+  .opt.slide select:disabled{opacity:1; color:var(--cyan)}
+  #botRow{justify-content:flex-end; gap:6px; margin-top:-6px}
+  #botRow button{flex:0 0 auto; padding:7px 12px; font-size:10px}
   .opt.slide input:focus-visible{outline:2px solid var(--warn); outline-offset:2px}
 
   /* fighter maker */
@@ -289,12 +294,13 @@
   <div class="card">
     <div class="codebox" id="codebox"><span class="lbl" style="margin:0">// Room code</span><b id="roomCode">----</b><small>friends enter this on their phone</small></div>
     <div class="seats" id="seats"></div>
+    <div class="row" id="botRow">
+      <button id="addBot" class="ghost">+ Bot</button>
+      <button id="dropBot" class="ghost">− Bot</button>
+    </div>
+    <div class="opt slide" id="envRow"><label for="envSel">Setting</label><select id="envSel"></select></div>
     <div class="opts" id="opts"></div>
     <div class="opt slide" id="wtRow"><label for="wtRange">Wiki time</label><input type="range" id="wtRange" min="1" max="10" step="1" value="5"><b id="wtVal">5/10</b></div>
-    <div class="row" id="botRow">
-      <button id="addBot" class="ghost">Add bot</button>
-      <button id="dropBot" class="ghost">Remove bot</button>
-    </div>
     <button id="startBtn">Start match</button>
     <p class="note" id="lobbyNote"></p>
     <button id="leaveLobby" class="ghost">Leave</button>
@@ -411,6 +417,9 @@ const T = {
   FUSE: 2.4, FLAME: 0.55, // seconds
   START_BOMBS: 1, START_RANGE: 2, MAX_BOMBS: 8, MAX_RANGE: 8,
   SOFT: 0.72, DROP: 0.4,  // soft-block density, power-up chance per block
+  SOFT_OPEN: 0.16,        // open arena: far fewer crates...
+  OPEN_UPS: 0.2, OPEN_RAIN: 0.8, OPEN_CAP: 45,    // ...power-ups on 20% of the floor at the start, one more every 0.8s up to 45
+  OPEN_BOMBS: 2, OPEN_RANGE: 3,                    // and everyone starts with more firepower
   ROUND_TIME: 180,        // round clock; at 0 the remaining rings close faster
   SHRINK_START: 90,       // seconds into a round before the arena starts closing in, ring by ring
   SHRINK_EVERY: 20,       // seconds between rings
@@ -475,13 +484,14 @@ const seatCustom = ['', '', '', ''];   // each seat's drawing, from the latest s
 // ---- Simulation (runs only on the host's phone, or locally in practice) ----
 let S = null;
 
-// Match options (host's lobby). env: 'mix' = a different setting every round, or one setting's index.
-// pw extra power-ups, hz arena hazards, gh ghost revenge, tm 2v2 teams.
+// Match options (host's lobby). env: a group ('mix' all, 'city', 'wild') = a different setting from it every round,
+// or one setting's index. map: classic, random shapes, or open (big open floor raining power-ups).
+// pw extra power-ups, hz arena hazards, gh ghost revenge, tm 2v2 teams, sx unlimited secret moves.
 function loadOpts(){
   let o = {}; try { o = JSON.parse(store.get('bl-opts') || '{}') || {}; } catch {}
-  const wt = Math.round(+o.wt), env = Number.isInteger(o.env) && o.env >= 0 && o.env < SETTINGS.length ? o.env : 'mix';
-  return {wiki: o.wiki !== false, w1: o.w1 !== false, map: o.map === 'random' ? 'random' : 'classic', wt: wt >= 1 && wt <= 10 ? wt : 5,
-    env, pw: o.pw !== false, hz: o.hz !== false, gh: o.gh !== false, tm: o.tm === true};
+  const wt = Math.round(+o.wt), env = Number.isInteger(o.env) && o.env >= 0 && o.env < SETTINGS.length ? o.env : ENV_GROUPS[o.env] ? o.env : 'mix';
+  return {wiki: o.wiki !== false, w1: o.w1 !== false, map: ['random', 'open'].includes(o.map) ? o.map : 'classic', wt: wt >= 1 && wt <= 10 ? wt : 5,
+    env, pw: o.pw !== false, hz: o.hz !== false, gh: o.gh !== false, tm: o.tm === true, sx: o.sx !== false};
 }
 function lobbyState(seats){
   return {ph: 'lobby', seats, opts: loadOpts(), wins: [0, 0, 0, 0], acks: [0, 0, 0, 0], rd: 0, last: -1, champ: -1, boom: 0};
@@ -496,14 +506,24 @@ const SHAPES = {
   hourglass: (nx, ny) => nx <= .4 + .6 * ny,
   notch: (nx, ny, x, y) => !(x > (W - 1) / 2 + 1 && y < (H - 1) / 2 - 1),
 };
-function makeArena(shape){
+// open: no pillar grid, just a few scattered chunks of cover, sparse crates, and power-ups all over the floor.
+function makeArena(shape, open){
   const g = new Array(N).fill(0), cx = (W - 1) / 2, cy = (H - 1) / 2;
   const inside = (x, y) => x >= 0 && y >= 0 && x < W && y < H && SHAPES[shape](Math.abs(x - cx) / cx, Math.abs(y - cy) / cy, x, y);
   const atEdge = (x, y) => { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (!inside(x + dx, y + dy)) return true; return false; };
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = y * W + x;
     if (!inside(x, y)) g[i] = 3;
-    else if (atEdge(x, y) || (x % 2 === 0 && y % 2 === 0)) g[i] = 1;
+    else if (atEdge(x, y) || (!open && x % 2 === 0 && y % 2 === 0)) g[i] = 1;
+  }
+  if (open) {   // cover: singles, pairs and L-shapes, kept off the corners where people spawn
+    const n = Math.round(N / 26);
+    for (let k = 0; k < n; k++) {
+      const x = 2 + ((Math.random() * (W - 4)) | 0), y = 2 + ((Math.random() * (H - 4)) | 0);
+      if (Math.min(x, W - 1 - x) + Math.min(y, H - 1 - y) < 5) continue;
+      const shapes = [[[0, 0]], [[0, 0], [1, 0]], [[0, 0], [0, 1]], [[0, 0], [1, 0], [0, 1]], [[0, 0], [1, 1]]];
+      for (const [dx, dy] of pick(shapes)) { const i = (y + dy) * W + x + dx; if (g[i] === 0 && !atEdge(x + dx, y + dy)) g[i] = 1; }
+    }
   }
   // Keep only the biggest connected open area so nobody spawns walled off.
   const comp = new Int16Array(N).fill(-1); let best = -1, bestSize = 0, id = 0;
@@ -534,7 +554,7 @@ function makeArena(shape){
   }
   const keep = new Set();
   for (const [sx, sy] of spawn) for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) keep.add((sy + dy) * W + sx + dx);
-  for (let i = 0; i < N; i++) if (g[i] === 0 && !keep.has(i) && Math.random() < T.SOFT) g[i] = 2;
+  for (let i = 0; i < N; i++) if (g[i] === 0 && !keep.has(i) && Math.random() < (open ? T.SOFT_OPEN : T.SOFT)) g[i] = 2;
   // Rings for shrinking: 1 = the edge walls, then counting inward (chessboard distance from outside).
   const ring = new Uint8Array(N), q = [];
   for (let i = 0; i < N; i++) if (g[i] !== 3 && atEdge(i % W, (i / W) | 0)) { ring[i] = 1; q.push(i); }
@@ -568,9 +588,14 @@ function nextRound(){
     setDims(w, Math.min(17, w + pick([0, 2, 4])));
     a = makeArena(shape);
   }
+  if (S.opts.map === 'open') for (let k = 0; k < 30 && !a; k++) {
+    const big = S.seats.filter(Boolean).length > 2;
+    setDims(big ? 15 : 13, big ? 19 : 17);
+    a = makeArena('rect', true);
+  }
   if (!a) { setDims(11, 13); a = makeArena('rect'); }
-  const env = S.opts.env;
-  S.en = env === 'mix' ? (S.rd === 1 ? (Math.random() * SETTINGS.length) | 0 : (S.en + 1 + ((Math.random() * (SETTINGS.length - 1)) | 0)) % SETTINGS.length) : env;
+  const env = S.opts.env, pool = ENV_GROUPS[env] ? ENV_GROUPS[env]() : null;
+  S.en = pool ? pick(pool.length > 1 ? pool.filter(i => i !== S.en) : pool) : env;
   S.g = a.g; S.spawn = a.spawn; S.ring = a.ring; S.fl = new Float32Array(N); S.fo = new Int8Array(N).fill(-1); S.bombs = []; S.ups = [];
   S.lastKill = null; S.kc = null;
   S.hz = new Uint8Array(N); S.laser = null; S.gb = [];
@@ -579,6 +604,12 @@ function nextRound(){
     if (!s) return null;
     const p = mkPlayer(i); if (s.gone) p.alive = false; return p;
   });
+  if (S.opts.map === 'open') {
+    for (const p of S.players) if (p) { p.bombs = T.OPEN_BOMBS; p.range = T.OPEN_RANGE; }
+    const keep = new Set(S.spawn.map(([x, y]) => y * W + x));
+    for (let i = 0; i < N; i++) if (S.g[i] === 0 && !keep.has(i) && Math.random() < T.OPEN_UPS) S.ups.push({i, t: dropType()});
+  }
+  S.rainT = T.OPEN_RAIN;
   Object.assign(S, {time: T.ROUND_TIME, elapsed: 0, cd: T.COUNTDOWN, ph: 'count', last: -1, ult: null, dom: null, ts: null, lance: null,
     ringNext: 2, shrinkAt: T.SHRINK_START, warn: null, shrinkDone: false,
     raceT: raceStart(S.opts.wt), raceDecayAt: T.RACE_DECAY_EVERY, decide: null});
@@ -839,7 +870,7 @@ function doAct(slot, a){
 // cuts down every other fighter still standing.
 const busySecret = () => S.ult || S.dom || S.ts || S.lance;
 function tryStop(p){
-  if (!S.tsUsed || S.tsUsed[p.slot] || busySecret()) return;
+  if (!S.tsUsed || (S.tsUsed[p.slot] && !S.opts.sx) || busySecret()) return;
   S.tsUsed[p.slot] = true; S.ts = {a: p.slot, t: 0};
   for (const o of S.players) if (o && o !== p) o.q = [];
 }
@@ -853,7 +884,7 @@ function lanceBand(x0, y0, d){
   return out;
 }
 function tryLance(p){
-  if (!S.lnUsed || S.lnUsed[p.slot] || busySecret()) return;
+  if (!S.lnUsed || (S.lnUsed[p.slot] && !S.opts.sx) || busySecret()) return;
   const x0 = Math.round(p.x), y0 = Math.round(p.y), foes = S.players.filter(o => o && o.alive && o !== p && !mates(o.slot, p.slot));
   let best = p.face, bn = -1, bd = 1e9;
   for (const d of 'udlr') {
@@ -876,14 +907,14 @@ function tickLance(dt){
   if (L.t >= T.LANCE_WIND + T.LANCE_FIRE) S.lance = null;
 }
 function tryDomain(p){
-  if (!S.domUsed || S.domUsed[p.slot] || busySecret()) return;
+  if (!S.domUsed || (S.domUsed[p.slot] && !S.opts.sx) || busySecret()) return;
   S.domUsed[p.slot] = true;
   for (const o of S.players) if (o) o.q = [];
   S.dom = {a: p.slot, t: 0};
 }
 function tryUlt(p, vi){
   const best = S.players[vi];
-  if (!S.ultUsed || S.ultUsed[p.slot] || !best || best === p || !best.alive || best.inv > 0 || mates(p.slot, vi) || S.ts || S.lance) return false;
+  if (!S.ultUsed || (S.ultUsed[p.slot] && !S.opts.sx) || !best || best === p || !best.alive || best.inv > 0 || mates(p.slot, vi) || S.ts || S.lance) return false;
   if (Math.max(Math.abs(Math.round(best.x) - Math.round(p.x)), Math.abs(Math.round(best.y) - Math.round(p.y))) > T.ULT_REACH) return false;
   S.ultUsed[p.slot] = true;
   for (const o of S.players) if (o) o.q = [];
@@ -953,7 +984,8 @@ function respawn(p, free){   // free: a ghost's comeback, which doesn't shorten 
   const i = cells.length ? cells[(Math.random() * cells.length) | 0] : S.spawn[p.slot][1] * W + S.spawn[p.slot][0];
   const x = i % W, y = (i / W) | 0;
   Object.assign(p, {x, y, tx: x, ty: y, moving: false, q: [], alive: true, racing: false, failed: false, inv: T.RESPAWN_SHIELD,
-    bombs: T.START_BOMBS, range: T.START_RANGE, speed: T.SPEED, kick: false, pierce: false, line: false, shield: 0, ghost: null});
+    bombs: S.opts.map === 'open' ? T.OPEN_BOMBS : T.START_BOMBS, range: S.opts.map === 'open' ? T.OPEN_RANGE : T.START_RANGE, speed: T.SPEED,
+    kick: false, pierce: false, line: false, shield: 0, ghost: null});
   if (!free) S.raceT *= T.RESPAWN_DECAY;
   S.decide = null;
 }
@@ -995,11 +1027,23 @@ function explode(b){
   for (const i of hit) { S.fl[i] = T.FLAME; S.fo[i] = b.owner; }
 }
 // Power-ups: 0 bomb, 1 range, 2 speed; with Power-ups+ on also 3 kick, 4 pierce, 5 line bomb, 6 shield.
-function maybeDrop(i){
-  if (Math.random() >= T.DROP) return;
+function dropType(){
   const r = Math.random();
-  if (!S.opts.pw) return S.ups.push({i, t: r < 0.38 ? 0 : r < 0.72 ? 1 : 2});
-  S.ups.push({i, t: r < .29 ? 0 : r < .54 ? 1 : r < .68 ? 2 : r < .77 ? 3 : r < .85 ? 4 : r < .92 ? 5 : 6});
+  if (!S.opts.pw) return r < 0.38 ? 0 : r < 0.72 ? 1 : 2;
+  return r < .29 ? 0 : r < .54 ? 1 : r < .68 ? 2 : r < .77 ? 3 : r < .85 ? 4 : r < .92 ? 5 : 6;
+}
+function maybeDrop(i){
+  if (Math.random() < (S.opts.map === 'open' ? .6 : T.DROP)) S.ups.push({i, t: dropType()});
+}
+// Open arena: power-ups keep raining onto empty floor.
+function rainUps(dt){
+  if (S.opts.map !== 'open' || (S.rainT -= dt) > 0) return;
+  S.rainT = T.OPEN_RAIN;
+  if (S.ups.length >= T.OPEN_CAP) return;
+  for (let k = 0; k < 20; k++) {
+    const i = (Math.random() * N) | 0;
+    if (S.g[i] === 0 && !bombAt(i) && !S.ups.some(u => u.i === i) && !(S.fl[i] > 0) && !S.players.some(p => p && p.alive && cellOf(p) === i)) { S.ups.push({i, t: dropType()}); return; }
+  }
 }
 function update(dt){
   if (!S || S.ph === 'lobby' || S.ph === 'match') return;
@@ -1037,7 +1081,7 @@ function update(dt){
   }
   for (const p of S.players) if (p && p.racing && (p.raceLeft -= dt) <= 0) { p.racing = false; p.failed = true; }
   tickBombs(dt); tickLance(dt);
-  if (!stopped) { tickHazards(dt); tickGhosts(dt); }
+  if (!stopped) { tickHazards(dt); tickGhosts(dt); rainUps(dt); }
   for (const p of S.players) if (p && p.alive) {
     if (p.inv > 0 && stopped) p.inv -= dt;
     if ((stopped && p.slot !== S.ts.a) || (S.lance && S.lance.a === p.slot)) continue;
@@ -1162,8 +1206,8 @@ function botThink(p, dt){
 // ---- Snapshot: the one format both the host screen and remote phones draw from --
 function encode(){
   const s = {ph: S.ph, rd: S.rd, w: S.wins, k: S.acks, last: S.last, champ: S.champ,
-    o: [S.opts.wiki ? 1 : 0, S.opts.w1 ? 1 : 0, S.opts.map === 'random' ? 1 : 0, S.opts.wt || 5, S.opts.env === 'mix' ? -1 : S.opts.env,
-      S.opts.pw ? 1 : 0, S.opts.hz ? 1 : 0, S.opts.gh ? 1 : 0, S.opts.tm ? 1 : 0],
+    o: [S.opts.wiki ? 1 : 0, S.opts.w1 ? 1 : 0, ['classic', 'random', 'open'].indexOf(S.opts.map), S.opts.wt || 5, S.opts.env,
+      S.opts.pw ? 1 : 0, S.opts.hz ? 1 : 0, S.opts.gh ? 1 : 0, S.opts.tm ? 1 : 0, S.opts.sx ? 1 : 0],
     seat: S.seats.map(x => x ? [x.name, x.kind, x.peer || 0, x.gone ? 1 : 0, x.ch | 0, x.ch === CUSTOM ? x.cu : 0] : 0)};
   if (S.ph === 'lobby') { if (S.tv) s.tv = S.tv; return s; }
   if (S.ph === 'round' && S.kc) s.kc = S.kc;
@@ -1760,6 +1804,88 @@ const SETTINGS = [
       R(1, 1, 14, 15, '#1a3a5a'); R(2, 2, 12, 13, '#7fc8f0'); R(2, 2, 12, 2, '#d8f4ff'); R(2, 2, 2, 12, '#b8e4ff');
       R(7, 5, 1, 4, '#4a9ad0'); R(8, 9, 2, 1, '#4a9ad0'); R(10, 10, 1, 3, '#4a9ad0'); R(2, 14, 12, 1, '#3a7ab0'); })},
 ];
+// The Wilds: overgrown, magical places (inspired by the biomes of Magicite), drawn in the same 16x16 tile style.
+const tree = (canopy, light, dark, trunk, trim) => tile(R => {
+  R(3, 0, 10, 1, dark); R(1, 1, 14, 2, canopy); R(0, 3, 16, 6, canopy); R(1, 9, 14, 2, dark);
+  R(3, 1, 4, 1, light); R(2, 2, 3, 2, light); R(9, 3, 3, 2, light); R(5, 6, 2, 1, light); R(12, 6, 2, 2, light);
+  R(1, 8, 3, 1, dark); R(8, 7, 3, 1, dark);
+  R(0, 11, TS, 5, trunk); R(6, 11, 4, 5, dark); R(7, 12, 1, 3, trunk); R(0, 11, TS, 1, trim); R(0, 15, TS, 1, 'rgba(0,0,0,.4)');
+});
+SETTINGS.push(
+  {name: 'Deep Forest', grp: 'wild', amb: 'rgb(96,122,100)', fx: 'fireflies', neon: '#7dff6a', neon2: '#2de2c0',
+    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#1a2416' : '#1c2718');
+      if (hash(x, y, 7) < .35) { R(2, 3, 8, 5, '#243a1e'); R(4, 2, 6, 7, '#243a1e'); }
+      for (let k = 0; k < 4; k++) { const a = (r() * 14) | 0, c = (r() * 13) | 0; R(a, c + 1, 1, 2, '#4f8a32'); R(a + 1, c, 1, 3, '#7cc24a'); }
+      if (r() < .4) R((r() * 14) | 0, (r() * 14) | 0, 2, 1, '#3a3a30'); },
+    walls: () => [tree('#2f6b2a', '#5fa83a', '#1e4a1c', '#4a3020', '#7dff6a'), tree('#2a5e30', '#4f9a44', '#1a4020', '#3e2716', '#7dff6a')],
+    crate: () => tile(R => {   // mossy boulder
+      R(2, 2, 12, 13, OUT); R(3, 3, 10, 11, '#6b6f66'); R(3, 3, 10, 1, '#8a8e84'); R(3, 3, 1, 10, '#8a8e84'); R(9, 8, 3, 2, '#4e524a');
+      R(3, 2, 6, 2, '#4f8a32'); R(5, 1, 3, 1, '#7cc24a'); R(10, 3, 3, 1, '#4f8a32'); R(3, 13, 10, 1, '#4e524a'); })},
+  {name: 'Spore Swamp', grp: 'wild', amb: 'rgb(100,98,124)', fx: 'spores', neon: '#b967ff', neon2: '#3ad6a0',
+    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#142019' : '#16231b');
+      if (hash(x, y, 8) < .25) { R(2, 4, 12, 7, '#0c1a1c'); R(4, 3, 8, 9, '#0c1a1c'); R(5, 5, 4, 1, '#2a6a66'); R(9, 8, 3, 1, '#1e4e4c'); }
+      for (let k = 0; k < 3; k++) { const a = (r() * 14) | 0, c = (r() * 13) | 0; R(a, c, 1, 3, '#6a3aa8'); R(a + 1, c + 1, 1, 2, '#8a4ad0'); } },
+    glow(R, x, y){ if (hash(x, y, 8) < .25) R(5, 5, 4, 1, '#3ad6a0'); },
+    walls: () => [tree('#5a2a8a', '#8a4ad0', '#3a1a5e', '#2e2420', '#b967ff')],
+    crate: () => tile(R => {   // mossy stump sprouting glowing teal caps
+      R(2, 4, 12, 12, OUT); R(3, 5, 10, 10, '#5a4a2a'); R(3, 5, 10, 2, '#6e8a3a'); R(4, 7, 1, 7, '#45381e'); R(8, 8, 1, 6, '#45381e'); R(11, 7, 1, 7, '#45381e');
+      R(4, 2, 4, 3, OUT); R(5, 2, 2, 2, '#3ad6a0'); R(9, 1, 5, 4, OUT); R(10, 1, 3, 2, '#3ad6a0'); R(10, 1, 1, 1, '#c8fff0'); R(11, 3, 1, 2, '#e8dcc0'); })},
+  {name: 'Red Veldt', grp: 'wild', amb: 'rgb(128,102,98)', fx: 'petals', neon: '#ff6a4a', neon2: '#ffb84a',
+    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#4a1a1e' : '#521c22');
+      for (let k = 0; k < 6; k++) { const a = (r() * 15) | 0, c = (r() * 13) | 0; R(a, c, 1, 3, r() < .5 ? '#8a2a30' : '#c04040'); }
+      if (hash(x, y, 9) < .2) R(4, 6, 7, 4, '#3a2418'); },
+    walls: () => [tree('#9a2a2a', '#d24a3a', '#6a1a1e', '#4a2a1a', '#ffb84a'), tree('#a8382a', '#e8603a', '#701e1a', '#4a2a1a', '#ffb84a')],
+    crate: () => tile(R => {   // big spotted golden mushroom
+      R(1, 1, 14, 9, OUT); R(2, 2, 12, 7, '#e8a030'); R(2, 2, 12, 1, '#ffd070'); R(4, 3, 3, 2, '#fff6e0'); R(9, 4, 2, 2, '#fff6e0'); R(12, 6, 1, 1, '#fff6e0'); R(2, 8, 12, 1, '#a86a18');
+      R(5, 9, 6, 6, OUT); R(6, 9, 4, 5, '#f0e2c8'); R(6, 9, 4, 1, '#c8b494'); })},
+  {name: 'Crystal Quarry', grp: 'wild', amb: 'rgb(104,128,142)', fx: 'sparkle', neon: '#5ff8e8', neon2: '#e8fbff',
+    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#22303a' : '#253540'); R(0, TS - 1, TS, 1, '#18222a'); R(TS - 1, 0, 1, TS, '#18222a');
+      if (r() < .5) R(((r() * 10) | 0) + 2, ((r() * 10) | 0) + 2, 4, 1, '#1a262e');
+      if (hash(x, y, 10) < .3) { const a = 3 + ((x * 7) % 9), c = 4 + ((y * 5) % 8); R(a, c, 1, 2, '#8af0f0'); R(a + 1, c + 1, 1, 1, '#d8fffb'); } },
+    glow(R, x, y){ if (hash(x, y, 10) < .3) R(3 + ((x * 7) % 9), 4 + ((y * 5) % 8), 2, 2, '#5ff8e8'); },
+    walls: () => [tile(R => {   // crystal cluster on rock
+      R(0, 6, TS, 5, '#3a4a56'); R(0, 6, TS, 1, '#506270');
+      R(2, 1, 3, 9, '#2aa8b0'); R(3, 0, 1, 1, '#d8fffb'); R(3, 1, 2, 8, '#7af0e8'); R(3, 2, 1, 5, '#d8fffb');
+      R(7, 3, 3, 7, '#2aa8b0'); R(8, 2, 1, 1, '#d8fffb'); R(8, 3, 2, 6, '#7af0e8');
+      R(11, 4, 3, 6, '#2aa8b0'); R(12, 4, 2, 5, '#7af0e8'); R(12, 5, 1, 2, '#d8fffb');
+      R(0, 11, TS, 5, '#2a3640'); R(0, 11, TS, 1, '#5ff8e8'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
+    blink: (x, y, t) => hash(x, y, (t / 300) | 0) < .2 ? [3 + ((x + y) % 3) * 4, 2 + (x % 3), '#ffffff'] : null,
+    crate: () => tile(R => {   // geode, cracked open
+      R(2, 2, 12, 13, OUT); R(3, 3, 10, 11, '#56606a'); R(3, 3, 10, 1, '#727e8a'); R(5, 6, 6, 6, '#1a2a34');
+      R(6, 7, 1, 3, '#7af0e8'); R(8, 6, 1, 4, '#d8fffb'); R(9, 8, 1, 3, '#7af0e8'); R(7, 10, 2, 1, '#2aa8b0'); })},
+  {name: 'Volcano', grp: 'wild', amb: 'rgb(132,98,86)', fx: 'embers', neon: '#ff7a1a', neon2: '#ffd23f',
+    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#1e1414' : '#221616');
+      for (let k = 0; k < 5; k++) R((r() * 15) | 0, (r() * 15) | 0, 1, 1, '#2e1e1c');
+      if (hash(x, y, 11) < .22) { R(2, 7, 5, 1, '#5a1a0a'); R(6, 8, 4, 1, '#5a1a0a'); R(9, 9, 5, 1, '#5a1a0a'); } },
+    glow(R, x, y){ if (hash(x, y, 11) < .22) { R(2, 7, 5, 1, '#ff5a1a'); R(6, 8, 4, 1, '#ff7a1a'); R(9, 9, 5, 1, '#ff5a1a'); } },
+    walls: () => [tile(R => {   // orange pillar tree
+      R(2, 0, 12, 3, '#ff8a2a'); R(3, 0, 10, 1, '#ffc060'); R(1, 3, 14, 3, '#e86a1a'); R(2, 6, 12, 3, '#ff8a2a'); R(3, 6, 10, 1, '#ffc060');
+      R(1, 9, 14, 2, '#b84a10'); R(2, 3, 2, 1, '#ffd23f'); R(11, 7, 2, 1, '#ffd23f');
+      R(0, 11, TS, 5, '#3a1a10'); R(6, 11, 4, 5, '#2a120a'); R(0, 11, TS, 1, '#ff7a1a'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
+    lamp: (x, y) => hash(x, y, 12) < .15 ? '#ff7a1a' : null,
+    crate: () => tile(R => {   // obsidian with ore
+      R(2, 2, 12, 13, OUT); R(3, 3, 10, 11, '#241a20'); R(3, 3, 10, 1, '#3e3038'); R(5, 5, 2, 1, '#ff9a3c'); R(9, 7, 2, 2, '#ff7a1a');
+      R(6, 10, 1, 2, '#ffd23f'); R(11, 11, 1, 1, '#ff9a3c'); })},
+  {name: 'Cosmic Crater', grp: 'wild', amb: 'rgb(112,94,144)', fx: 'cosmic', neon: '#ff4fd8', neon2: '#7a6aff',
+    floor(R, x, y, r){ R(0, 0, TS, TS, (x + y) & 1 ? '#140e24' : '#170f2a');
+      for (let k = 0; k < 3; k++) R((r() * 15) | 0, (r() * 15) | 0, 1, 1, r() < .7 ? '#e8e0ff' : '#ff9ae8');
+      if (hash(x, y, 13) < .12) { R(4, 5, 8, 6, '#0e0a1a'); R(5, 4, 6, 8, '#0e0a1a'); R(5, 5, 3, 1, '#2a2048'); } },
+    glow(R, x, y, r){ if (r() < .15) R((r() * 15) | 0, (r() * 15) | 0, 1, 1, '#ff4fd8'); },
+    walls: () => [tile(R => {   // rock spire with pink crystal tips
+      R(4, 1, 8, 10, '#3a2a5a'); R(2, 4, 12, 7, '#3a2a5a'); R(4, 1, 2, 10, '#4e3a76'); R(6, 0, 3, 3, '#ff4fd8'); R(7, 0, 1, 1, '#ffd0f4');
+      R(12, 3, 2, 3, '#ff4fd8'); R(2, 5, 2, 2, '#c03aa8');
+      R(0, 11, TS, 5, '#261a3e'); R(0, 11, TS, 1, '#ff4fd8'); R(0, 15, TS, 1, 'rgba(0,0,0,.4)'); })],
+    blink: (x, y, t) => [7, 0, ((t / 260 + x + y) | 0) & 1 ? '#ffd0f4' : '#ff4fd8'],
+    crate: () => tile(R => {   // meteorite with a glowing seam
+      R(2, 2, 12, 13, OUT); R(3, 3, 10, 11, '#6a5a58'); R(3, 3, 10, 1, '#8a7a76'); R(4, 9, 2, 2, '#4a3e3e'); R(10, 5, 2, 2, '#4a3e3e');
+      R(5, 5, 2, 1, '#ff7ae0'); R(7, 6, 2, 1, '#ff7ae0'); R(8, 7, 1, 2, '#ffd0f4'); R(9, 9, 2, 1, '#ff7ae0'); })},
+);
+for (const E of SETTINGS) E.grp = E.grp || 'city';
+const ENV_GROUPS = {
+  mix: () => SETTINGS.map((_, i) => i),
+  city: () => SETTINGS.map((E, i) => E.grp === 'city' ? i : -1).filter(i => i >= 0),
+  wild: () => SETTINGS.map((E, i) => E.grp === 'wild' ? i : -1).filter(i => i >= 0),
+};
 const envCache = new Map();
 function envArt(ei, rd){
   const E = SETTINGS[ei] || SETTINGS[0], m = E.mood ? E.mood(rd || 1) : E, key = ei + '|' + (E.mood ? m.a : '') + '|' + W + 'x' + H;
@@ -1981,21 +2107,22 @@ function renderLobby(s){
   wr.disabled = !authority;
   if (document.activeElement !== wr) wr.value = wt;
   $('wtVal').textContent = wt + '/10 · ' + Math.round(raceStart(wt)) + 's';
+  const es = $('envSel'); es.disabled = !authority;
+  if (document.activeElement !== es) es.value = String(o[4] == null ? 'mix' : o[4]);
   const key = JSON.stringify([seats, me, NET.role, NET.code, o]);
   if (key === lobbyKey) return; lobbyKey = key;
   const ob = $('opts'); ob.textContent = '';
-  const items = [], on = v => v ? 'On' : 'Off', env = +o[4];
-  items.push(['env', 'Setting', SETTINGS[env] ? SETTINGS[env].name : 'Mixed', false]);
+  const items = [], on = v => v ? 'On' : 'Off';
   if (WIKI_OK) items.push(['wiki', 'Wiki respawn', on(o[0]), false], ['w1', 'Wiki 1v1', on(o[1]), !o[0]]);
-  items.push(['map', 'Map', o[2] ? 'Random' : 'Classic', false], ['tm', 'Teams', o[8] ? '2v2' : 'Off', false],
-    ['pw', 'Power-ups+', on(o[5] !== 0), false], ['hz', 'Hazards', on(o[6] !== 0), false], ['gh', 'Ghosts', on(o[7] !== 0), false]);
+  items.push(['map', 'Map', ['Classic', 'Random', 'Open'][+o[2]] || 'Classic', false], ['tm', 'Teams', o[8] ? '2v2' : 'Off', false],
+    ['pw', 'Power-ups+', on(o[5] !== 0), false], ['hz', 'Hazards', on(o[6] !== 0), false], ['gh', 'Ghosts', on(o[7] !== 0), false],
+    ['sx', 'Secrets', o[9] === 0 ? 'Once' : 'Unlimited', false]);
   for (const [k, label, val, muted] of items) {
-    const bt = document.createElement('button'); bt.type = 'button'; bt.className = 'opt' + (muted ? ' muted' : '') + (k === 'env' ? ' wide' : '');
+    const bt = document.createElement('button'); bt.type = 'button'; bt.className = 'opt' + (muted ? ' muted' : '');
     const v = document.createElement('b'); v.textContent = val; if (val === 'Off') v.className = 'off';
     bt.append(label, v);
     if (authority) bt.onclick = () => {
-      S.opts[k] = k === 'map' ? (S.opts.map === 'random' ? 'classic' : 'random')
-        : k === 'env' ? (S.opts.env === 'mix' ? 0 : S.opts.env + 1 < SETTINGS.length ? S.opts.env + 1 : 'mix') : !S.opts[k];
+      S.opts[k] = k === 'map' ? {classic: 'random', random: 'open', open: 'classic'}[S.opts.map] || 'classic' : !S.opts[k];
       store.set('bl-opts', JSON.stringify(S.opts));
     };
     else bt.setAttribute('aria-disabled', 'true');
@@ -2126,6 +2253,20 @@ $('hostBtn').onclick = () => { audio(); hostGame(); };
 $('practiceBtn').onclick = () => { audio(); practice(); };
 $('joinBtn').onclick = () => { audio(); joinGame($('code').value); };
 $('tvBtn').onclick = () => { audio(); joinGame($('code').value, true); };
+// Setting picker: all settings mixed, one group mixed, or one setting.
+(() => {
+  const es = $('envSel'), opt = (v, t, parent) => { const o = document.createElement('option'); o.value = v; o.textContent = t; (parent || es).append(o); };
+  opt('mix', 'Mixed: everything'); opt('city', 'Mixed: City'); opt('wild', 'Mixed: Wilds');
+  for (const [grp, label] of [['city', 'City'], ['wild', 'Wilds']]) {
+    const og = document.createElement('optgroup'); og.label = label; es.append(og);
+    SETTINGS.forEach((E, i) => { if (E.grp === grp) opt(String(i), E.name, og); });
+  }
+  es.addEventListener('change', () => {
+    if (!S || (NET.role !== 'host' && NET.role !== 'solo')) return;
+    const v = es.value; S.opts.env = ENV_GROUPS[v] ? v : Math.min(SETTINGS.length - 1, Math.max(0, +v | 0));
+    store.set('bl-opts', JSON.stringify(S.opts));
+  });
+})();
 $('wtRange').addEventListener('input', () => {
   if (!S || (NET.role !== 'host' && NET.role !== 'solo')) return;
   S.opts.wt = Math.min(10, Math.max(1, Math.round(+$('wtRange').value || 5)));
@@ -2155,8 +2296,11 @@ function setDims(w, h){
 }
 function layout(){
   const st = $('stage'), dpr = Math.min(3, devicePixelRatio || 1);
-  SCALE = Math.max(1, Math.floor(Math.min(st.clientWidth * dpr / BW, st.clientHeight * dpr / BH)));
-  cv.width = BW * SCALE; cv.height = BH * SCALE;
+  // Whole-number scaling keeps pixels crisp; but if that would waste over a quarter of the space (big arenas on
+  // 2x screens), scale by a fraction instead.
+  const fit = Math.min(st.clientWidth * dpr / BW, st.clientHeight * dpr / BH);
+  SCALE = Math.max(1, Math.floor(fit) / fit < .75 ? fit : Math.floor(fit));
+  cv.width = Math.round(BW * SCALE); cv.height = Math.round(BH * SCALE);
   cv.style.width = cv.width / dpr + 'px'; cv.style.height = cv.height / dpr + 'px';
 }
 addEventListener('resize', () => { if (screen === 'game') layout(); });
@@ -2293,7 +2437,7 @@ let wx = [], wxKind = '', thunderAt = 0;
 function weather(kind, dt, now){
   if (reduce || kind === 'none' || !kind) { wx = []; return; }
   if (kind !== wxKind) { wx = []; wxKind = kind; }
-  const want = {rain: 70, snow: 40, data: 26, steam: 14, bubbles: 16}[kind] || 0;
+  const want = {rain: 70, snow: 40, data: 26, steam: 14, bubbles: 16, fireflies: 14, spores: 22, petals: 18, sparkle: 18, embers: 26, cosmic: 12}[kind] || 0;
   while (wx.length < want) wx.push({x: Math.random() * BW, y: Math.random() * BH, v: Math.random(), age: Math.random() * 3});
   for (const p of wx) {
     p.age += dt;
@@ -2313,6 +2457,30 @@ function weather(kind, dt, now){
       p.y -= dt * (8 + p.v * 6); p.x += Math.sin(p.age + p.v * 5) * dt * 4;
       if (p.y < -8) { p.y = BH + 4; p.x = Math.random() * BW; p.age = 0; }
       b.fillStyle = 'rgba(220,210,230,.07)'; b.fillRect((p.x | 0) - 2, p.y | 0, 5, 3); b.fillRect((p.x | 0) - 1, (p.y | 0) - 2, 3, 2);
+    } else if (kind === 'fireflies') {   // drifting, blinking green-gold dots
+      p.x += Math.sin(p.age * .9 + p.v * 20) * dt * 9; p.y += Math.cos(p.age * .7 + p.v * 13) * dt * 7;
+      if (p.x < 0 || p.x > BW || p.y < 0 || p.y > BH) { p.x = Math.random() * BW; p.y = Math.random() * BH; }
+      const on = Math.sin(p.age * 2.2 + p.v * 30) > .2;
+      if (on) { b.fillStyle = 'rgba(220,255,120,.85)'; b.fillRect(p.x | 0, p.y | 0, 1, 1); b.fillStyle = 'rgba(190,255,90,.25)'; b.fillRect((p.x | 0) - 1, (p.y | 0) - 1, 3, 3); }
+    } else if (kind === 'spores' || kind === 'embers') {   // rising specks: purple spores / orange embers
+      p.y -= dt * (kind === 'embers' ? 22 + p.v * 26 : 7 + p.v * 8); p.x += Math.sin(p.age * 1.5 + p.v * 9) * dt * 6;
+      if (p.y < -2 || p.age > 6) { p.y = BH + 2; p.x = Math.random() * BW; p.age = 0; }
+      b.fillStyle = kind === 'embers' ? `rgba(255,${140 + ((p.v * 100) | 0)},40,${.9 - p.age / 7})` : `rgba(200,120,255,${.55 - p.age / 12})`;
+      b.fillRect(p.x | 0, p.y | 0, 1, kind === 'embers' && p.v < .3 ? 2 : 1);
+    } else if (kind === 'petals') {   // red petals blowing across
+      p.x += dt * (18 + p.v * 14); p.y += Math.sin(p.age * 2 + p.v * 9) * dt * 6 + dt * 4;
+      if (p.x > BW + 2 || p.y > BH) { p.x = -3; p.y = Math.random() * BH; }
+      b.fillStyle = p.v < .5 ? 'rgba(255,110,110,.7)' : 'rgba(255,180,150,.6)'; b.fillRect(p.x | 0, p.y | 0, 2, 1);
+    } else if (kind === 'sparkle') {   // crystal glints popping in and out
+      const ph = (p.age * 1.3 + p.v) % 1;
+      if (ph < .03) { p.x = Math.random() * BW; p.y = Math.random() * BH; }
+      if (ph < .25) { const a = 1 - ph / .25; b.fillStyle = `rgba(216,255,251,${a})`; b.fillRect(p.x | 0, p.y | 0, 1, 1);
+        if (ph < .12) { b.fillRect((p.x | 0) - 1, p.y | 0, 3, 1); b.fillRect(p.x | 0, (p.y | 0) - 1, 1, 3); } }
+    } else if (kind === 'cosmic') {   // slow pink orbs drifting up and down the sky
+      p.y += Math.sin(p.age * .6 + p.v * 9) * dt * 14;
+      if (p.age > 12) { p.age = 0; p.x = Math.random() * BW; p.y = Math.random() * BH; }
+      b.fillStyle = 'rgba(255,79,216,.18)'; b.fillRect((p.x | 0) - 2, (p.y | 0) - 2, 5, 5);
+      b.fillStyle = 'rgba(255,190,240,.8)'; b.fillRect((p.x | 0) - 1, (p.y | 0) - 1, 2, 2);
     } else if (kind === 'bubbles') {
       p.y -= dt * (6 + p.v * 8); if (p.y < -4 || p.age > 4) { p.y = Math.random() * BH; p.x = Math.random() * BW; p.age = 0; }
       b.fillStyle = `rgba(125,255,106,${.3 * Math.max(0, 1 - p.age / 4)})`; b.fillRect(p.x | 0, p.y | 0, 2, 1); b.fillRect((p.x | 0), (p.y | 0) - 1, 1, 1);
