@@ -354,7 +354,8 @@ const T = {
   ULT_TIME: 2.8,          // secret finisher cinematic length (the match pauses for it)
   ULT_REACH: 6,           // tiles from you in any direction (diagonals too, walls don't block)
   AIM_TIME: 4,            // seconds to tap a target after entering the secret
-  SECRET_TIME: 2,         // seconds to tap above the field twice, then below it twice (keyboard: up up down down left right left right, space)
+  SECRET_TIME: 3,         // seconds for a secret: 2 taps above the field + 2 below = finisher, 3 + 3 = domain
+  DOMAIN_TIME: 4.6,       // domain expansion cinematic length (the match pauses for it)
   QTE_TIME: 0.5,          // the victim's window to hit JUMP! (the cinematic keeps rolling meanwhile)
   DODGE_TIME: 5,          // then this long to make DODGE_GOAL in a mini 2048 from a normal start
   DODGE_GOAL: 32,
@@ -478,7 +479,7 @@ function mkPlayer(slot){
 }
 function newMatch(){
   S.seats = S.seats.map(s => (s && !s.gone) ? s : null);
-  S.wins = [0, 0, 0, 0]; S.rd = 0; S.champ = -1; S.ultUsed = [false, false, false, false];
+  S.wins = [0, 0, 0, 0]; S.rd = 0; S.champ = -1; S.ultUsed = [false, false, false, false]; S.domUsed = [false, false, false, false];
   nextRound();
 }
 function nextRound(){
@@ -495,7 +496,7 @@ function nextRound(){
     if (!s) return null;
     const p = mkPlayer(i); if (s.gone) p.alive = false; return p;
   });
-  Object.assign(S, {time: T.ROUND_TIME, elapsed: 0, cd: T.COUNTDOWN, ph: 'count', last: -1, ult: null,
+  Object.assign(S, {time: T.ROUND_TIME, elapsed: 0, cd: T.COUNTDOWN, ph: 'count', last: -1, ult: null, dom: null,
     ringNext: 2, shrinkAt: T.SHRINK_START, warn: null, shrinkDone: false,
     raceT: T.RACE_TIME, raceDecayAt: T.RACE_DECAY_EVERY, decide: null});
 }
@@ -550,7 +551,8 @@ function doAct(slot, a){
     else if ((a === 'K' || a === 'F') && u.stage === 2) { u.dodged = a === 'K'; u.stage = 3; }
     return;
   }
-  if (u || !p.alive) return;
+  if (u || S.dom || !p.alive) return;
+  if (a === 'D') { tryDomain(p); return; }   // secret domain expansion from that player's phone
   const ti = 'ghij'.indexOf(a);
   if (ti >= 0) { tryUlt(p, ti); return; }   // secret finisher aimed at seat ti from that player's phone
   if (a === 'b') dropBomb(p);
@@ -558,6 +560,14 @@ function doAct(slot, a){
 }
 // Secret finisher (see tap() below): once per match, the player picks any enemy within ULT_REACH tiles and the
 // match freezes for a cinematic. The victim gets a JUMP! prompt; hit it and make DODGE_GOAL in a mini 2048 to dodge.
+// Domain expansion (3 taps above the field, then 3 below): once per match, freezes the match for a cinematic and
+// cuts down every other fighter still standing.
+function tryDomain(p){
+  if (!S.domUsed || S.domUsed[p.slot] || S.ult || S.dom) return;
+  S.domUsed[p.slot] = true;
+  for (const o of S.players) if (o) o.q = [];
+  S.dom = {a: p.slot, t: 0};
+}
 function tryUlt(p, vi){
   const best = S.players[vi];
   if (!S.ultUsed || S.ultUsed[p.slot] || !best || best === p || !best.alive || best.inv > 0) return false;
@@ -640,6 +650,13 @@ function update(dt){
   for (let i = 0; i < N; i++) if (S.fl[i] > 0) S.fl[i] -= dt;
   if (S.ph === 'count') { S.cd -= dt; if (S.cd <= 0) S.ph = 'play'; return; }
   if (S.ph === 'round') { S.pause -= dt; if (S.pause <= 0) { if (S.champ >= 0) S.ph = 'match'; else nextRound(); } return; }
+  if (S.dom) {   // everything holds still for the domain, then everyone else falls
+    if ((S.dom.t += dt) >= T.DOMAIN_TIME) {
+      for (const o of S.players) if (o && o.slot !== S.dom.a && o.alive) o.alive = false;
+      S.dom = null;
+    }
+    return;
+  }
   if (S.ult) {   // everything holds still for the finisher cinematic
     const u = S.ult;
     if (u.stage === 2) { if ((u.wait -= dt) <= 0) u.stage = 3; }
@@ -760,6 +777,7 @@ function encode(){
   s.dm = [W, H]; s.g = S.g.join('');
   s.rt = Math.ceil(S.raceT * 10);
   if (S.warn) s.wc = S.warn;
+  if (S.dom) s.dx = [S.dom.a, Math.round(S.dom.t * 100)];
   if (S.ult) s.ul = [S.ult.a, S.ult.v, Math.round(S.ult.t * 100), S.ult.stage, S.ult.dodged ? 1 : 0];
   if (S.ringNext > 2 || S.warn) s.sk = 1;
   if (live <= 1 && S.decide != null && !S.players.some(p => p && p.racing)) s.hd = Math.ceil(S.decide * 10);
@@ -959,7 +977,7 @@ function hostSync(){
     for (const e of a) {
       if (!Array.isArray(e) || typeof e[0] !== 'number' || e[0] <= S.acks[i]) continue;
       S.acks[i] = e[0]; s.inputAt = now;
-      if (typeof e[1] === 'string' && e[1].length === 1 && 'udlrbwqxJKFghij'.includes(e[1])) doAct(i, e[1]);
+      if (typeof e[1] === 'string' && e[1].length === 1 && 'udlrbwqxJKFghijD'.includes(e[1])) doAct(i, e[1]);
     }
   });
   const key = [NET.code, S.seats.filter(Boolean).length, S.ph === 'lobby' ? 'lobby' : 'play', myName()].join('|');
@@ -1412,10 +1430,12 @@ function tap(x, y){
   }
   aim = null;
   while (secret.length && now - secret[0][1] > T.SECRET_TIME * 1000) secret.shift();
-  const seq = secret.map(k => k[0]).join('');
-  if (y < fr.top) { if (seq.includes('Z')) secret.length = 0; secret.push(['A', now]); if (secret.length > 2) secret.shift(); return; }
-  if (y > fr.bottom && (seq === 'AA' || seq === 'AAZ')) {
-    if (seq === 'AAZ') { secret.length = 0; if (aimTargets().length) aim = {until: now + T.AIM_TIME * 1000}; } else secret.push(['Z', now]);
+  const seq = secret.map(k => k[0]).join(''), ups = (seq.match(/^A*/) || [''])[0].length, downs = seq.length - ups;
+  if (y < fr.top) { if (downs) secret.length = 0; secret.push(['A', now]); if (secret.length > 3) secret.shift(); return; }
+  if (y > fr.bottom && ups >= 2 && downs < ups) {   // finishing a secret: these taps don't bomb
+    secret.push(['Z', now]);
+    if (ups === 2 && downs + 1 === 2) { secret.length = 0; if (aimTargets().length) aim = {until: now + T.AIM_TIME * 1000}; }
+    else if (ups === 3 && downs + 1 === 3) { secret.length = 0; sendAct('D'); }
     return;
   }
   secret.length = 0; sendAct('b');
@@ -1425,6 +1445,7 @@ function keyTap(){
   const now = performance.now(), seq = keyHist.filter(k => now - k[1] < 4000).map(k => k[0]).join('');
   keyHist.length = 0;
   if (seq.endsWith('uuddlrlr') && aimTargets().length) aim = {until: now + T.AIM_TIME * 1000};   // then click a target
+  else if (seq.endsWith('uuuddd')) sendAct('D');   // domain: up up up down down down, space
   else if (!g2048) sendAct('b');
 }
 const endTouch = e => {
@@ -1634,6 +1655,7 @@ function drawGame(s, dt, now){
   b.globalCompositeOperation = 'source-over'; b.drawImage(VIGNETTE, 0, 0);
 
   if (Array.isArray(s.ul)) drawUlt(s, now);
+  if (Array.isArray(s.dx)) drawDomain(s, now);
   // closing ring: pulsing red, unlit so nobody misses it
   if (Array.isArray(s.wc)) {
     const a = reduce ? .35 : .25 + .2 * Math.sin(now / 90);
@@ -1646,7 +1668,7 @@ function drawGame(s, dt, now){
   }
   // markers stay unlit so you can always find yourself
   for (const o of order) {
-    if (o.i !== me || Array.isArray(s.ul)) continue;
+    if (o.i !== me || Array.isArray(s.ul) || Array.isArray(s.dx)) continue;
     const X = Math.round(o.x * TS) + 8, Y = Math.round(o.y * TS) - 8 + (reduce ? 0 : Math.round(Math.sin(now / 180)));
     b.fillStyle = OUT; b.fillRect(X - 4, Y - 4, 9, 2); b.fillRect(X - 3, Y - 2, 7, 2); b.fillRect(X - 2, Y, 5, 1); b.fillRect(X - 1, Y + 1, 3, 1);
     b.fillStyle = '#ffffff'; b.fillRect(X - 3, Y - 3, 7, 1); b.fillRect(X - 2, Y - 2, 5, 1); b.fillRect(X - 1, Y - 1, 3, 1); b.fillRect(X, Y, 1, 1);
@@ -1663,7 +1685,7 @@ function drawGame(s, dt, now){
   }
 
   // aim mode for the secret finisher: my reach as a faint box, targets bracketed
-  if (aim && now < aim.until && !Array.isArray(s.ul)) {
+  if (aim && now < aim.until && !Array.isArray(s.ul) && !Array.isArray(s.dx)) {
     const mine = order.find(o => o.i === me), targets = aimTargets();
     if (mine) {
       const R = T.ULT_REACH, x0 = (Math.round(mine.x) - R) * TS, y0 = (Math.round(mine.y) - R) * TS, side = (2 * R + 1) * TS;
@@ -1685,6 +1707,111 @@ function drawGame(s, dt, now){
   let ox = 0, oy = 0;
   if (shake > 0) { shake -= dt; ox = Math.round((Math.random() - .5) * 3) * SCALE; oy = Math.round((Math.random() - .5) * 3) * SCALE; }
   blit(ox, oy, dt, now);
+}
+
+// ---- Domain expansion cinematic: the world goes black, a crimson sky splits open, a fanged shrine rises,
+// slashes fill the air and every other fighter is cut down. Original art, drawn at art resolution. ----
+let dxLocal = null;
+function drawShrine(cx, gy, a){
+  const sil = '#0c0205', rim = `rgba(255,42,90,${a})`, R = (x, y, w, h, c) => { b.fillStyle = c; b.fillRect(Math.round(x), Math.round(y), w, h); };
+  const roof = (y, half, top, h) => { for (let k = 0; k < h; k++) { const w = Math.round(top + (half - top) * (k / h)); R(cx - w, y + k, w * 2, 1, sil); } R(cx - top, y, top * 2, 1, rim);
+    R(cx - half - 3, y + h - 4, 3, 2, sil); R(cx - half - 5, y + h - 6, 2, 2, sil); R(cx + half, y + h - 4, 3, 2, sil); R(cx + half + 3, y + h - 6, 2, 2, sil); };   // upturned eaves
+  R(cx - 64, gy - 8, 128, 8, sil); R(cx - 64, gy - 8, 128, 1, rim);                        // platform
+  for (const dx of [-36, -20, 18, 34]) R(cx + dx, gy - 40, 3, 32, sil);                 // pillars
+  R(cx - 30, gy - 40, 60, 30, sil);                                                      // hall
+  R(cx - 16, gy - 34, 32, 18, '#2a0008');                                                // the maw
+  for (let x = -14; x < 14; x += 4) { R(cx + x, gy - 34, 2, 3, '#efe6d8'); R(cx + x + 2, gy - 19, 2, 3, '#efe6d8'); }   // fangs
+  roof(gy - 52, 54, 34, 12);
+  R(cx - 22, gy - 64, 44, 12, sil);
+  roof(gy - 74, 38, 18, 10);
+  R(cx - 1, gy - 84, 2, 10, sil); R(cx - 4, gy - 86, 8, 2, rim);                        // finial
+  for (const side of [-1, 1]) for (let k = 0; k < 3; k++) {                             // skull piles
+    const sx = cx + side * (50 + (k % 2) * 6), sy = gy - 13 - k * 6;
+    R(sx - 3, sy, 7, 5, '#d9cfc0'); R(sx - 2, sy + 1, 2, 2, '#1a0006'); R(sx + 1, sy + 1, 2, 2, '#1a0006');
+  }
+}
+function drawDomain(s, now){
+  const [a, tt] = s.dx.map(Number), seats = Array.isArray(s.seat) ? s.seat : [], ps = Array.isArray(s.p) ? s.p : [];
+  if (!(a >= 0 && a < 4)) return;
+  const key = s.rd + ':' + a, hostT = (tt || 0) / 100;
+  if (!dxLocal || dxLocal.key !== key) dxLocal = {key, hostT, at: now, cue: {}};
+  else if (hostT !== dxLocal.hostT) { dxLocal.hostT = hostT; dxLocal.at = now; }
+  const t = Math.min(T.DOMAIN_TIME, hostT + Math.min(.15, (now - dxLocal.at) / 1000)), cue = dxLocal.cue;
+  const cx = BW / 2, cy = BH / 2, gy = Math.round(BH * .7), end = T.DOMAIN_TIME;
+  if (!cue.start) { cue.start = 1; domainDrone(); }
+  b.save(); b.imageSmoothingEnabled = false;
+  b.fillStyle = '#000'; b.fillRect(0, 0, BW, BH);
+  const open = Math.max(0, Math.min(1, (t - .3) / .5));   // a crimson slit tears open across the dark
+  if (open > 0) {
+    const h = Math.max(1, BH * open), g = b.createLinearGradient(0, cy - h / 2, 0, cy + h / 2);
+    g.addColorStop(0, '#16000a'); g.addColorStop(.5, '#8a0c20'); g.addColorStop(.72, '#300008'); g.addColorStop(1, '#060003');
+    b.fillStyle = g; b.fillRect(0, cy - h / 2, BW, h);
+    b.globalAlpha = open; b.fillStyle = '#ff2a5a'; b.beginPath(); b.arc(cx, BH * .2, 14, 0, 7); b.fill();   // blood moon
+    b.fillStyle = '#16000a'; b.beginPath(); b.arc(cx + 5, BH * .2 - 3, 12, 0, 7); b.fill(); b.globalAlpha = 1;
+  }
+  if (t > .7) {   // still water below the shrine, with a rippling red horizon
+    b.fillStyle = '#0a0004'; b.fillRect(0, gy, BW, BH - gy);
+    for (let k = 0; k < 6; k++) { b.fillStyle = `rgba(255,42,90,${.25 - k * .035})`; b.fillRect(0, gy + 3 + k * 5, BW, 1); }
+    const rise = Math.max(0, Math.min(1, (t - .7) / .9));
+    drawShrine(cx, gy + Math.round((1 - rise) * 90), rise);
+  }
+  // fighters on the water: the caster on the left, everyone else in a row, cut apart when the slashes land
+  const victims = ps.map((q, i) => i).filter(i => i !== a && Array.isArray(ps[i]) && ps[i][2]);
+  const cut = t > 3.25, S2 = 2;
+  if (t > 1.2) {
+    const ca = charSprite(chOf(seats[a] && seats[a][4]), a, 0, 0);
+    b.drawImage(ca, 6, gy - ca.height * S2 + 6, ca.width * S2, ca.height * S2);
+    victims.forEach((i, k) => {
+      const sp = charSprite(chOf(seats[i] && seats[i][4]), i, 0, 0), w = sp.width * S2, h = sp.height * S2;
+      const x = Math.round(BW - 22 - (k + 1) * (w + 4) + (t < 3.25 ? Math.sin(now / 25 + k) * 1.5 : 0)), y = gy - h + 6;
+      if (!cut) b.drawImage(sp, x, y, w, h);
+      else {   // sliced in two along a diagonal, halves drifting apart
+        const d = Math.min(14, (t - 3.25) * 30);
+        b.drawImage(sp, 0, 0, sp.width, sp.height / 2, x - d * .4, y - d * .5, w, h / 2);
+        b.drawImage(sp, 0, sp.height / 2, sp.width, sp.height / 2, x + d * .4, y + h / 2 + d * .2, w, h / 2);
+        b.fillStyle = '#ff2a5a'; b.fillRect(x - 2, y + h / 2, w + 4, 1);
+      }
+    });
+  }
+  // the slashes: a storm of thin cuts, each a white core with a red edge, flickering in and out
+  if (t > 1.6 && t < 3.9) {
+    const r = rnd(97 + a * 13);
+    for (let k = 0; k < 46; k++) {
+      const at = 1.6 + k * .048, life = t - at;
+      const x0 = r() * BW, y0 = r() * BH * .85, ang = (r() - .5) * 2.2, len = 50 + r() * 140;
+      if (life < 0 || life > .16) continue;
+      if (!cue['s' + k]) { cue['s' + k] = 1; slashSound(); }
+      const x1 = x0 + Math.cos(ang) * len, y1 = y0 + Math.sin(ang) * len, f = 1 - life / .16;
+      b.globalAlpha = f; b.lineCap = 'square';
+      b.strokeStyle = '#ff2a5a'; b.lineWidth = 3; b.beginPath(); b.moveTo(x0, y0); b.lineTo(x1, y1); b.stroke();
+      b.strokeStyle = '#fff'; b.lineWidth = 1; b.beginPath(); b.moveTo(x0, y0); b.lineTo(x1, y1); b.stroke();
+      b.globalAlpha = 1;
+    }
+  }
+  if (t > 3.25 && !cue.cut) { cue.cut = 1; boom(); shake = reduce ? 0 : .3; }
+  if (t > 3.9 && t < 4.2) { b.globalAlpha = 1 - (t - 3.9) / .3; b.fillStyle = '#fff'; b.fillRect(0, 0, BW, BH); b.globalAlpha = 1; }
+  if (t > end - .4) { b.globalAlpha = (t - (end - .4)) / .4; b.fillStyle = '#000'; b.fillRect(0, 0, BW, BH); }
+  b.restore();
+}
+function domainDrone(){
+  if (!AC || AC.state !== 'running') return;
+  const t = AC.currentTime, out = AC.createGain(), lp = AC.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 320; out.gain.setValueAtTime(0, t);
+  out.gain.linearRampToValueAtTime(.14, t + .7); out.gain.setValueAtTime(.14, t + 3.6); out.gain.linearRampToValueAtTime(0, t + T.DOMAIN_TIME);
+  lp.connect(out).connect(AC.destination);
+  for (const f of [55, 82.4, 110.7]) { const o = AC.createOscillator(); o.type = 'sawtooth'; o.frequency.value = f; o.connect(lp); o.start(t); o.stop(t + T.DOMAIN_TIME); }
+}
+let slashBuf = null;
+function slashSound(){
+  if (!AC || AC.state !== 'running') return;
+  if (!slashBuf) {
+    slashBuf = AC.createBuffer(1, Math.floor(AC.sampleRate * .09), AC.sampleRate);
+    const d = slashBuf.getChannelData(0); let prev = 0;
+    for (let i = 0; i < d.length; i++) { const n = Math.random() * 2 - 1; d[i] = (n - prev) * Math.pow(1 - i / d.length, 3) * .6; prev = n; }
+  }
+  const src = AC.createBufferSource(), g = AC.createGain();
+  src.buffer = slashBuf; src.playbackRate.value = .8 + Math.random() * .6; g.gain.value = .22;
+  src.connect(g).connect(AC.destination); src.start();
 }
 
 // ---- Secret finisher cinematic, drawn over the field at art resolution ----------
@@ -1867,6 +1994,8 @@ function renderBanner(s){
   if (s.ph === 'count') {
     const n = Math.ceil((+s.cd || 0) / 10); text = String(Math.max(1, n)); sub = 'Round ' + s.rd;
     if (n !== lastCount) { lastCount = n; blip(440); }
+  } else if (s.ph === 'play' && Array.isArray(s.dx)) {
+    const a = +s.dx[0]; sub = (a === mySlot() ? 'Your' : nameOf(a) + "'s") + ' domain expansion'; text = 'CRIMSON SHRINE'; color = '#ff2a5a';
   } else if (s.ph === 'play' && Array.isArray(s.ul)) {
     const a = +s.ul[0], v = +s.ul[1], stage = +s.ul[3];
     if (stage === 2) { sub = v === mySlot() ? 'make ' + T.DODGE_GOAL : nameOf(v) + ' tries to dodge'; text = 'DODGE?'; color = '#fcee0a'; }
@@ -1884,7 +2013,7 @@ function renderBanner(s){
     else text = 'Draw';
   }
   const key = text + sub + color; if (key === bannerKey) return; bannerKey = key;
-  const bn = $('banner'); bn.textContent = ''; bn.style.color = color; bn.classList.toggle('top', s.ph === 'play' && Array.isArray(s.ul));
+  const bn = $('banner'); bn.textContent = ''; bn.style.color = color; bn.classList.toggle('top', s.ph === 'play' && (Array.isArray(s.ul) || Array.isArray(s.dx)));
   if (sub) { const sm = document.createElement('small'); sm.textContent = sub; bn.append(sm); }
   bn.append(text);
   $('over').hidden = s.ph !== 'match';
@@ -1904,6 +2033,7 @@ function present(s, dt, now){
   const dm = Array.isArray(s.dm) ? s.dm.map(Number) : [11, 13];
   if (dm.every(v => Number.isInteger(v) && v >= 5 && v <= 21)) setDims(dm[0], dm[1]);
   show('game'); drawGame(s, dt, now); renderHud(s); renderBanner(s); syncRespawn(s, now); syncDodge(s, now);
+  if (s.ph === 'count' && Array.isArray(s.o) && s.o[0]) prefetchRace();
   if (!TOUCH && !keysToastShown && s.ph === 'count') { keysToastShown = true; toast('Move with the arrow keys or WASD. Space or click drops a bomb.'); }
   const watching = NET.role === 'client' && mySlot() < 0;
   if (watching !== $('hintText').classList.contains('watching')) {
@@ -2036,7 +2166,24 @@ async function makeRace(){
   throw new Error('no route');
 }
 let raceP = null, race = null;
-function prefetchRace(){ if (WIKI_OK && !raceP) raceP = makeRace().catch(e => ({error: e})); }
+// Routes are worked out ahead of time (at each round's countdown and right after a race is used), and the start
+// article is downloaded with them, so tapping Respawn opens a page right away.
+function prefetchRace(){
+  if (!WIKI_OK || raceP) return;
+  raceP = makeRace().then(r => { fetchParse(r.start, true).catch(() => {}); fetchParse(r.start, false).catch(() => {}); return r; })
+    .catch(e => ({error: e}));
+}
+// Article downloads, shared and reused: 'L' is just the intro (small, shows fast), 'F' the whole article.
+const artCache = new Map();
+function fetchParse(title, lead){
+  const key = (lead ? 'L:' : 'F:') + title;
+  if (!artCache.has(key)) {
+    if (artCache.size > 40) artCache.delete(artCache.keys().next().value);
+    artCache.set(key, wapi(Object.assign({action: 'parse', page: title, prop: 'text', redirects: 1, disableeditsection: 1, disabletoc: 1}, lead ? {section: 0} : {}))
+      .catch(e => { artCache.delete(key); throw e; }));
+  }
+  return artCache.get(key);
+}
 
 // The host decides who may race (flag 2) and keeps each race's clock (flag 1 + seconds left).
 function syncRespawn(s, now){
@@ -2076,6 +2223,7 @@ async function openRace(){
   sendAct('w');
   race.t0 = race.sent = performance.now();
   loadArticle(r.start);
+  prefetchRace();   // line up the next route now
 }
 function closeRace(){
   if (!race) return;
@@ -2093,16 +2241,25 @@ async function loadArticle(title, back){
   if (sameTitle(title, race.target)) return finishRace();
   const ticket = race.ticket = {};
   wikiMsg('Loading ' + title + '…'); $('wTitle').textContent = title;
-  let j;
-  try { j = await wapi({action: 'parse', page: title, prop: 'text', redirects: 1, disableeditsection: 1, disabletoc: 1}); }
-  catch { if (race && race.ticket === ticket) wikiMsg("Couldn't load that page. Try another link."); return; }
-  if (!race || race.ticket !== ticket) return;
-  const real = (j.parse && j.parse.title) || title;
-  if (sameTitle(real, race.target)) return finishRace();
-  if (!back && race.cur) race.hist.push(race.cur);
-  race.cur = real; $('wTitle').textContent = real; $('wBack').disabled = !race.hist.length;
-  $('wBody').replaceChildren(...cleanArticle((j.parse && j.parse.text) || ''));
-  $('wBody').scrollTop = 0;
+  // Show the intro the moment it lands, then swap in the whole article (keeping your scroll position).
+  let shown = false, done = false;
+  const show = (j, whole) => {
+    if (!race || race.ticket !== ticket || done) return;
+    const real = (j.parse && j.parse.title) || title;
+    if (sameTitle(real, race.target)) { done = true; return finishRace(); }
+    if (!shown) {
+      if (!back && race.cur) race.hist.push(race.cur);
+      race.cur = real; $('wTitle').textContent = real; $('wBack').disabled = !race.hist.length;
+    }
+    const top = shown ? $('wBody').scrollTop : 0, nodes = cleanArticle((j.parse && j.parse.text) || '');
+    if (!whole) { const m = document.createElement('div'); m.className = 'wiki-msg'; m.textContent = 'Loading the rest…'; nodes.push(m); }
+    $('wBody').replaceChildren(...nodes); $('wBody').scrollTop = top;
+    shown = true; if (whole) done = true;
+  };
+  const full = fetchParse(title, false);
+  fetchParse(title, true).then(j => { if (!done) show(j, false); }).catch(() => {});
+  try { show(await full, true); }
+  catch { if (race && race.ticket === ticket && !shown) wikiMsg("Couldn't load that page. Try another link."); }
 }
 // Keep only text, structure and article links; everything else (scripts, styles, images, attributes) goes.
 function cleanArticle(html){
