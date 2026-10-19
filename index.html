@@ -64,12 +64,12 @@
   .cursor{display:inline-block; width:.5em; height:.9em; background:var(--hot); vertical-align:-2px; animation:blink 1s steps(1) infinite}
   @keyframes blink{50%{opacity:0}}
   label,.lbl{display:block; font-family:var(--pix); font-size:11px; letter-spacing:1px; text-transform:uppercase; color:var(--hot); margin-bottom:6px}
-  input{
+  input,textarea{
     width:100%; box-sizing:border-box; font:24px var(--term); color:var(--ink);
     background:var(--panel); border:1px solid var(--edge); border-left:3px solid var(--cyan); padding:8px 12px; border-radius:0;
     -webkit-user-select:text; user-select:text;
   }
-  input:focus{outline:1px solid var(--cyan); outline-offset:2px}
+  input:focus,textarea:focus{outline:1px solid var(--cyan); outline-offset:2px}
   input::placeholder{color:#4d4560}
   #code{text-transform:uppercase; letter-spacing:10px; text-align:center}
   .row{display:flex; gap:10px}
@@ -223,6 +223,14 @@
   .char.add small{font-size:10px; color:var(--dim)}
   .toast{position:fixed; left:50%; bottom:max(24px,env(safe-area-inset-bottom,0px)); transform:translateX(-50%);
     background:var(--panel2); box-shadow:inset 3px 0 0 var(--hot); padding:8px 14px; font-size:20px; z-index:9; max-width:calc(100% - 40px)}
+  .buglink{align-self:center; background:none; box-shadow:none; color:var(--dim); font-size:10px; padding:6px 10px; clip-path:none}
+  .bug{position:fixed; inset:0; z-index:12; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(7,6,11,.9)}
+  .bug .card{background:var(--panel2); box-shadow:inset 3px 0 0 var(--hot); padding:16px; gap:12px; max-height:100%; overflow:auto; box-sizing:border-box}
+  .bug textarea{font-size:20px; min-height:96px; resize:vertical}
+  .bug details{color:var(--dim); font-size:16px}
+  .bug summary{cursor:pointer; font-family:var(--pix); font-size:10px; letter-spacing:1px; text-transform:uppercase}
+  .bug pre{margin:8px 0 0; max-height:30vh; overflow:auto; font:12px/1.3 ui-monospace,monospace; white-space:pre-wrap; word-break:break-word;
+    -webkit-user-select:text; user-select:text}
   @media (prefers-reduced-motion:reduce){.menu::after,.logo .g,.cursor,.char[aria-pressed="true"] canvas{animation:none}}
 </style>
 
@@ -256,6 +264,7 @@
     </div>
     <div class="games" id="games"></div>
     <p class="note" id="netNote" hidden>Online play isn't available here right now. Practice against bots still works.</p>
+    <button class="buglink bugOpen" type="button">Report a bug</button>
   </div>
 </section>
 
@@ -273,6 +282,7 @@
     <button id="startBtn">Start match</button>
     <p class="note" id="lobbyNote"></p>
     <button id="leaveLobby" class="ghost">Leave</button>
+    <button class="buglink bugOpen" type="button">Report a bug</button>
   </div>
 </section>
 
@@ -324,7 +334,7 @@
       <button id="leaveOver" class="ghost">Leave</button>
     </div>
   </div>
-  <div class="hint"><span id="hintText"><b>swipe</b> step · <b>tap</b> bomb</span><button id="leaveGame" class="ghost">Quit</button></div>
+  <div class="hint"><span id="hintText"><b>swipe</b> step · <b>tap</b> bomb</span><button class="ghost bugOpen" type="button">Bug</button><button id="leaveGame" class="ghost">Quit</button></div>
 </section>
 
 <!-- RESPAWN WIKIRACE -->
@@ -341,11 +351,41 @@
   <article class="wiki-body" id="wBody"></article>
 </section>
 
+<!-- BUG REPORT -->
+<section class="bug" id="bug" hidden role="dialog" aria-modal="true" aria-labelledby="bugHead">
+  <div class="card">
+    <span class="lbl" id="bugHead">// Bug report</span>
+    <textarea id="bugText" maxlength="1500" placeholder="What happened? (optional)" aria-label="What happened"></textarea>
+    <p class="note">Adds what the game and connection were doing over the last minute. Names in the game are included.</p>
+    <button id="bugGh" type="button">Send on GitHub</button>
+    <div class="row">
+      <button id="bugShare" class="ghost" type="button">Share</button>
+      <button id="bugCopy" class="ghost" type="button">Copy</button>
+    </div>
+    <button id="bugClose" class="ghost" type="button">Cancel</button>
+    <details><summary>What gets sent</summary><pre id="bugPrev"></pre></details>
+  </div>
+</section>
+
 <div class="toast" id="toast" hidden></div>
 <pre id="dbg" hidden style="position:fixed;left:4px;top:max(4px,env(safe-area-inset-top,0px));z-index:20;margin:0;padding:6px 8px;background:rgba(0,0,0,.8);color:#7dff6a;font:12px/1.3 ui-monospace,monospace;pointer-events:none;max-width:calc(100% - 8px);white-space:pre-wrap"></pre>
 
 <script>
 "use strict";
+// ---- Flight recorder: the last minute or so of what happened, for bug reports -----------
+const BUILD = (() => { const t = document.currentScript ? document.currentScript.textContent : ''; let h = 0;
+  for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return (h >>> 0).toString(36); })();
+const LOG = [], SAMPLES = [], ERRS = new Map();
+function note(msg){ LOG.push([performance.now(), String(msg).slice(0, 200)]); if (LOG.length > 120) LOG.shift(); }
+function noteErr(e){
+  const m = String(e && (e.stack || e.message) || e).slice(0, 400), k = m.split('\n')[0];
+  const r = ERRS.get(k); if (r) { r.n++; return; }
+  ERRS.set(k, {m, n: 1}); note('error: ' + k);
+}
+addEventListener('error', e => noteErr(e.error || e.message));
+addEventListener('unhandledrejection', e => noteErr(e.reason));
+addEventListener('online', () => note('phone online')); addEventListener('offline', () => note('phone offline'));
+document.addEventListener('visibilitychange', () => note(document.hidden ? 'app hidden' : 'app visible'));
 // ---- Tunables (the feel lives here) -----------------------------------------
 const T = {
   SPEED: 4.8, SPEED_UP: 0.7, MAX_SPEED: 8.4,   // tiles/sec while stepping
@@ -849,7 +889,10 @@ function relayNet(){
     const mine = base + (hosting ? '/h/' : '/p/') + id, will = {topic: mine, payload: '', retain: true, qos: 0};
     // Everyone first looks for a host (is this code free / is anyone hosting it?); the host also hears players.
     const c = await connect(url, id, will, hosting ? [base + '/h/+', base + '/p/+'] : [base + '/h/+']);
-    const stats = {url, rx: 0, tx: 0, drop: 0};
+    const stats = {url, rx: 0, tx: 0, drop: 0}, where = url.replace(/^wss?:\/\//, '').split(/[:/]/)[0];
+    let up = true;
+    c.on('close', () => { if (up) { up = false; note('relay ' + where + ' lost'); } });
+    c.on('connect', () => { if (!up) { up = true; note('relay ' + where + ' back'); } });
     const pres = new Map(); let mine$ = {}, list = Object.freeze([]);
     const rebuild = () => { list = Object.freeze([...pres].map(([pid, v]) => Object.freeze(
       {peer: pid, by: null, isMe: pid === id, sameTab: pid === id, kind: 'viewer', guest: false, presence: v, updatedAt: Date.now()}))); };
@@ -944,6 +987,7 @@ async function openHost(){
     NET.game = g;
   }
   if (!NET.game) return toast('Could not open a room. Check your connection and try again.');
+  note('hosting ' + code + (NET.game.url ? ' on ' + NET.game.url : ''));
   NET.role = 'host'; NET.code = code; NET.sentJson = '';
   S = lobbyState([mySeat(), null, null, null]);
 }
@@ -967,8 +1011,8 @@ async function openJoin(code){
   try { g = await NET.room.join('bl-' + code.toLowerCase(), {find: true}); }
   catch (e) { return toast(/relay/.test(e && e.message) ? NO_RELAY : 'Could not join that room. Check your connection and try again.'); }
   if (g.hub === true) { g.leave(); return toast('No game found with code ' + code + '.'); }   // nobody was hosting it
-  NET.game = g;
-  Object.assign(NET, {role: 'client', code, seq: 0, pend: [], seenHost: 0, joinedAt: performance.now(), lastHostPres: null});
+  NET.game = g; note('joined ' + code + (g.url ? ' on ' + g.url : ''));
+  Object.assign(NET, {role: 'client', code, snapN: 0, seq: 0, pend: [], seenHost: 0, joinedAt: performance.now(), lastHostPres: null});
   snap = null;
   NET.game.presence({r: 'p', nm: myName(), ch: myChar, cu: myChar === CUSTOM ? myCustom : null, a: []}).catch(() => {});
 }
@@ -1058,7 +1102,8 @@ function clientSync(now){
         snap = s;
         const slot = mySlot(), ack = slot >= 0 && Array.isArray(snap.k) ? +snap.k[slot] || 0 : 0;
         NET.pend = NET.pend.filter(e => e[0] > ack);
-        if (typeof s.t === 'number' && now - (NET.echoAt || 0) > 300) { NET.echoAt = now; NET.game.presence({e: s.t}).catch(() => {}); }
+        // (not the first state: that's the relay's stored copy, possibly seconds old)
+        if (typeof s.t === 'number' && ++NET.snapN > 1 && now - (NET.echoAt || 0) > 300) { NET.echoAt = now; NET.game.presence({e: s.t}).catch(() => {}); }
       }
     }
     if (NET.pend.length && now - (NET.resentAt || 0) > 1000) {   // moves the host hasn't confirmed yet: send again
@@ -1316,7 +1361,7 @@ function splat(color){   // death decal in the fallen player's seat color
 let screen = 'home';
 function show(id){ if (screen === id) return; screen = id; for (const s of ['home', 'lobby', 'game', 'maker']) $(s).hidden = s !== id; if (id === 'game') layout(); }
 let toastT = 0;
-function toast(msg){ const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, Math.max(2800, msg.length * 55)); }
+function toast(msg){ note('toast: ' + msg); const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, Math.max(2800, msg.length * 55)); }
 
 let charPage = myChar >= CUSTOM ? 2 : myChar >= CHAR_PAGES[1].from ? 1 : 0;
 function renderChars(){
@@ -1570,7 +1615,7 @@ addEventListener('mousemove', e => { if (!mouse || mouse.fired) return; const dx
   if (Math.hypot(dx, dy) > T.SWIPE_PX) { mouse.fired = true; swipe(dirOf(dx, dy)); } });
 addEventListener('mouseup', e => { if (mouse && !mouse.fired && performance.now() - mouse.t < T.TAP_MS) tap(e.clientX, e.clientY); mouse = null; });
 addEventListener('keydown', e => {
-  if (screen !== 'game' || !$('wiki').hidden) return;
+  if (screen !== 'game' || !$('wiki').hidden || !$('bug').hidden) return;
   const k = {arrowup: 'u', w: 'u', arrowdown: 'd', s: 'd', arrowleft: 'l', a: 'l', arrowright: 'r', d: 'r', ' ': 'b'}[e.key.toLowerCase()];
   if (!k || e.repeat) return; e.preventDefault();
   if (k === 'b') { if (!$('jumpBtn').hidden) $('jumpBtn').click(); else keyTap(); }
@@ -2466,6 +2511,85 @@ function flatline(){
 }
 function wakeLock(){ try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch {} }
 
+// ---- Bug reports ----------------------------------------------------------------
+// The report is a snapshot taken when the button is pressed: device, game and connection state, plus the flight
+// recorder. It goes out as a pre-filled GitHub issue, or through the share sheet / clipboard.
+const BUG_URL = 'https://github.com/heckiemoney1/blast-lanes/issues/new';
+let recPh = '', recAt = 0, recN = 0, recSt = null, recRx = 0, recTx = 0, bugCap = null;
+function record(now){
+  recN++;
+  const ph = NET.role ? NET.role + (snap ? ' / ' + snap.ph : '') : 'menu';
+  if (ph !== recPh) { recPh = ph; note('now ' + ph); }
+  if (now - recAt < 2000) return;
+  const el = (now - recAt) / 1000, fps = Math.round(recN / el); recAt = now; recN = 0;
+  if (!NET.role) return;
+  const g = NET.game, st = g && g.stats, parts = ['fps ' + fps];
+  if (st) {
+    if (st !== recSt) { recSt = st; recRx = st.rx; recTx = st.tx; }
+    parts.push('in ' + (st.rx - recRx) + ' out ' + (st.tx - recTx)); recRx = st.rx; recTx = st.tx;
+    const bf = g.buffered ? g.buffered() : 0; if (bf) parts.push('stuck ' + bf + 'B');
+  }
+  if (NET.role === 'host' && S && g) {
+    parts.push(netHz().toFixed(0) + '/s');
+    S.seats.forEach((x, i) => { if (x && x.kind === 'p') parts.push('p' + i + ' ' + (x.ping ? Math.round(x.ping) + 'ms' : '?ms') + (x.lost ? ' MISSING' : '') + (x.gone ? ' GONE' : '')); });
+  }
+  if (NET.role === 'client') parts.push('host ' + (NET.seenHost ? Math.round(now - NET.seenHost) + 'ms ago' : 'never') + ', unconfirmed ' + NET.pend.length);
+  if (!navigator.onLine) parts.push('OFFLINE');
+  SAMPLES.push([now, parts.join(' · ')]); if (SAMPLES.length > 30) SAMPLES.shift();
+}
+function captureBug(){
+  const now = performance.now(), g = NET.game, st = g && g.stats, c = navigator.connection, H = [];
+  let tz = ''; try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone; } catch {}
+  H.push('build ' + BUILD + ' · ' + new Date().toLocaleString() + (tz ? ' ' + tz : '') + ' · ' + (location.host || 'local'));
+  H.push('device ' + navigator.userAgent);
+  H.push('screen ' + innerWidth + 'x' + innerHeight + ' @' + devicePixelRatio + (TOUCH ? ' touch' : ' mouse/keys') + (navigator.onLine ? '' : ' OFFLINE') +
+    (c ? ' · net ' + (c.effectiveType || '?') + (c.downlink ? ' ' + c.downlink + 'Mb/s' : '') + (c.rtt ? ' rtt ' + c.rtt + 'ms' : '') : ''));
+  H.push('role ' + (NET.role || 'menu') + ' · code ' + (NET.code || '-') + ' · screen ' + screen + (snap ? ' · phase ' + snap.ph + ' · round ' + (snap.rd || '-') : '') +
+    (!$('wiki').hidden ? ' · in wikirace' : '') + (g2048 ? ' · in 2048 dodge' : ''));
+  const seats = NET.role === 'host' || NET.role === 'solo' ? (S ? S.seats : []) : [];
+  if (seats.length) H.push('seats ' + seats.map((x, i) => x ? i + ':' + x.name + '(' + x.kind + (x.ping ? ' ' + Math.round(x.ping) + 'ms' : '') + (x.lost ? ' missing' : '') + (x.gone ? ' gone' : '') + ')' : i + ':-').join(' '));
+  else if (snap && Array.isArray(snap.seat)) H.push('seats ' + snap.seat.map((x, i) => Array.isArray(x) ? i + ':' + x[0] + '(' + x[1] + (x[3] ? ' gone' : '') + ')' : i + ':-').join(' ') + ' · me ' + mySlot());
+  if (S && S.opts && (NET.role === 'host' || NET.role === 'solo')) H.push('options ' + JSON.stringify(S.opts));
+  if (st) H.push('relay ' + st.url + ' · in ' + st.rx + ' out ' + st.tx + ' merged ' + st.drop + (NET.role === 'host' ? ' · state ' + (NET.snapBytes || 0) + 'B at ' + netHz().toFixed(1) + '/s' : ''));
+  else if (g) H.push('relay claude room');
+  if (NET.role === 'client') { const sl = mySlot(); H.push('inputs sent ' + NET.seq + ' · confirmed ' + (snap && Array.isArray(snap.k) && sl >= 0 ? snap.k[sl] : '-') + ' · host seen ' + (NET.seenHost ? Math.round(now - NET.seenHost) + 'ms ago' : 'never')); }
+  return {now, head: H, errs: [...ERRS.values()].map(e => e.n + 'x ' + e.m), samples: SAMPLES.slice(), log: LOG.slice()};
+}
+function bugText(cap, n){
+  const ago = t => ('-' + ((cap.now - t) / 1000).toFixed(1) + 's').padStart(7);
+  const out = cap.head.slice();
+  if (cap.errs.length) out.push('', 'errors', ...cap.errs.slice(-5));
+  if (cap.samples.length) out.push('', 'every 2s', ...cap.samples.slice(-Math.ceil(n / 2)).map(([t, m]) => ago(t) + '  ' + m));
+  if (cap.log.length) out.push('', 'events', ...cap.log.slice(-n).map(([t, m]) => ago(t) + '  ' + m));
+  return out.join('\n');
+}
+const bugPlain = () => 'Blast Lanes bug report\n' + ($('bugText').value.trim() || '(no description)') + '\n\n' + bugText(bugCap, 80);
+function openBug(){
+  bugCap = captureBug(); note('bug report opened');
+  $('bugPrev').textContent = bugText(bugCap, 80); $('bugShare').hidden = !navigator.share;
+  $('bug').hidden = false;
+}
+function closeBug(){ $('bug').hidden = true; $('bugText').value = ''; }
+function copyText(t){
+  const fallback = () => { const a = document.createElement('textarea'); a.value = t; document.body.appendChild(a); a.select();
+    let ok = false; try { ok = document.execCommand('copy'); } catch {} a.remove(); return ok; };
+  return navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(t).then(() => true, fallback) : Promise.resolve(fallback());
+}
+for (const el of document.querySelectorAll('.bugOpen')) el.onclick = openBug;
+$('bugClose').onclick = closeBug;
+$('bug').addEventListener('keydown', e => { if (e.key === 'Escape') closeBug(); });
+$('bugGh').onclick = () => {
+  const d = $('bugText').value.trim(), title = 'Bug: ' + (d.split('\n')[0].slice(0, 70) || 'report from ' + (NET.role || 'menu'));
+  let n = 80, url;
+  do { url = BUG_URL + '?title=' + encodeURIComponent(title) + '&body=' + encodeURIComponent((d || '_(no description)_') + '\n\n```\n' + bugText(bugCap, n) + '\n```'); n -= 10; }
+  while (url.length > 7500 && n > 0);
+  const w = window.open(url, '_blank', 'noopener');
+  if (w === null) copyText(bugPlain()).then(ok => toast(ok ? "Couldn't open GitHub here, so the report is copied. Paste it to whoever fixes things." : "Couldn't open GitHub here."));
+  closeBug();
+};
+$('bugShare').onclick = () => { navigator.share({title: 'Blast Lanes bug report', text: bugPlain()}).then(closeBug, () => {}); };
+$('bugCopy').onclick = () => { copyText(bugPlain()).then(ok => { toast(ok ? 'Report copied.' : "Couldn't copy. Open “What gets sent” and copy it from there."); if (ok) closeBug(); }); };
+
 // ---- Debug panel (open the game with #debug at the end of the address) -------------
 const DEBUG = location.hash === '#debug';
 if (DEBUG) setInterval(() => {
@@ -2498,7 +2622,8 @@ function frame(now){
     } else if (NET.role === 'client' && NET.game) { clientSync(now); if (snap) predStep(snap, dt, now); }
     if (NET.role && snap) present(snap, dt, now);
     else if (NET.role === 'client') show('home');
-  } catch (err) { console.error(err); }
+  } catch (err) { console.error(err); noteErr(err); }
+  record(now);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
