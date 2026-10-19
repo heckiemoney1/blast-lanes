@@ -198,6 +198,12 @@
   .opt b.off{color:var(--dim)}
   .opt[aria-disabled="true"]{pointer-events:none}
   .opt.muted{opacity:.45}
+  .opt.slide{cursor:default}
+  .opt.slide label{margin:0; color:var(--ink); font:700 11px var(--pix); letter-spacing:1px; text-transform:uppercase; white-space:nowrap}
+  .opt.slide input{flex:1; min-width:0; padding:0; border:0; background:none; accent-color:var(--hot); height:24px}
+  .opt.slide b{white-space:nowrap; font-size:11px}
+  .opt.slide input:focus{outline:none}
+  .opt.slide input:focus-visible{outline:2px solid var(--warn); outline-offset:2px}
 
   /* fighter maker */
   .mk{display:flex; gap:12px; align-items:flex-start}
@@ -259,6 +265,7 @@
     <div class="codebox" id="codebox"><span class="lbl" style="margin:0">// Room code</span><b id="roomCode">----</b><small>friends enter this on their phone</small></div>
     <div class="seats" id="seats"></div>
     <div class="opts" id="opts"></div>
+    <div class="opt slide" id="wtRow"><label for="wtRange">Wiki time</label><input type="range" id="wtRange" min="1" max="10" step="1" value="5"><b id="wtVal">5/10</b></div>
     <div class="row" id="botRow">
       <button id="addBot" class="ghost">Add bot</button>
       <button id="dropBot" class="ghost">Remove bot</button>
@@ -405,7 +412,8 @@ let S = null;
 const OPTS_DEFAULT = {wiki: true, w1: true, map: 'classic'};
 function loadOpts(){
   let o = {}; try { o = JSON.parse(store.get('bl-opts') || '{}') || {}; } catch {}
-  return {wiki: o.wiki !== false, w1: o.w1 !== false, map: o.map === 'random' ? 'random' : 'classic'};
+  const wt = Math.round(+o.wt);
+  return {wiki: o.wiki !== false, w1: o.w1 !== false, map: o.map === 'random' ? 'random' : 'classic', wt: wt >= 1 && wt <= 10 ? wt : 5};
 }
 function lobbyState(seats){
   return {ph: 'lobby', seats, opts: loadOpts(), wins: [0, 0, 0, 0], acks: [0, 0, 0, 0], rd: 0, last: -1, champ: -1, boom: 0};
@@ -498,7 +506,7 @@ function nextRound(){
   });
   Object.assign(S, {time: T.ROUND_TIME, elapsed: 0, cd: T.COUNTDOWN, ph: 'count', last: -1, ult: null, dom: null,
     ringNext: 2, shrinkAt: T.SHRINK_START, warn: null, shrinkDone: false,
-    raceT: T.RACE_TIME, raceDecayAt: T.RACE_DECAY_EVERY, decide: null});
+    raceT: raceStart(S.opts.wt), raceDecayAt: T.RACE_DECAY_EVERY, decide: null});
 }
 // The next ring to close: the outermost one that still has open cells, as long as enough arena is left inside it.
 function nextRing(){
@@ -525,6 +533,8 @@ function closeRing(){
   S.warn = null; S.ringNext++;
   S.shrinkAt = S.elapsed + (S.time > 0 ? T.SHRINK_EVERY : T.SHRINK_FAST);
 }
+// Lobby slider "Wiki time" 1-10: 5 is RACE_TIME, each step is a fifth of it either way (1 = 8s, 10 = 80s).
+const raceStart = wt => T.RACE_TIME * (wt || 5) / 5;
 function liveCount(){ return S.players.filter(p => p && p.alive).length; }
 // Whether this dead player may start a respawn race right now.
 function canRace(p, live){
@@ -770,7 +780,7 @@ function botThink(p, dt){
 // ---- Snapshot: the one format both the host screen and remote phones draw from --
 function encode(){
   const s = {ph: S.ph, rd: S.rd, w: S.wins, k: S.acks, last: S.last, champ: S.champ,
-    o: [S.opts.wiki ? 1 : 0, S.opts.w1 ? 1 : 0, S.opts.map === 'random' ? 1 : 0],
+    o: [S.opts.wiki ? 1 : 0, S.opts.w1 ? 1 : 0, S.opts.map === 'random' ? 1 : 0, S.opts.wt || 5],
     seat: S.seats.map(x => x ? [x.name, x.kind, x.peer || 0, x.gone ? 1 : 0, x.ch | 0, x.ch === CUSTOM ? x.cu : 0] : 0)};
   if (S.ph === 'lobby') return s;
   const live = liveCount();
@@ -1344,7 +1354,13 @@ let lobbyKey = '';
 function renderLobby(s){
   const seats = Array.isArray(s.seat) ? s.seat : [], me = mySlot();
   const authority = NET.role === 'host' || NET.role === 'solo';
-  const o = Array.isArray(s.o) ? s.o : [1, 1, 0];
+  const o = Array.isArray(s.o) ? s.o : [1, 1, 0, 5];
+  // The slider lives outside the rebuilt part of the lobby so dragging it is never interrupted.
+  const wt = Math.min(10, Math.max(1, Math.round(+o[3] || 5))), wr = $('wtRange');
+  $('wtRow').hidden = !WIKI_OK; $('wtRow').classList.toggle('muted', !o[0]);
+  wr.disabled = !authority;
+  if (document.activeElement !== wr) wr.value = wt;
+  $('wtVal').textContent = wt + '/10 · ' + Math.round(raceStart(wt)) + 's';
   const key = JSON.stringify([seats, me, NET.role, NET.code, o]);
   if (key === lobbyKey) return; lobbyKey = key;
   const ob = $('opts'); ob.textContent = '';
@@ -1476,6 +1492,11 @@ $('code').addEventListener('keydown', e => { if (e.key === 'Enter') joinGame($('
 $('hostBtn').onclick = () => { audio(); hostGame(); };
 $('practiceBtn').onclick = () => { audio(); practice(); };
 $('joinBtn').onclick = () => { audio(); joinGame($('code').value); };
+$('wtRange').addEventListener('input', () => {
+  if (!S || (NET.role !== 'host' && NET.role !== 'solo')) return;
+  S.opts.wt = Math.min(10, Math.max(1, Math.round(+$('wtRange').value || 5)));
+  store.set('bl-opts', JSON.stringify(S.opts));
+});
 $('addBot').onclick = () => { const i = S.seats.findIndex(s => !s); if (i >= 0) S.seats[i] = botSeat(S.seats, i); };
 $('dropBot').onclick = () => { for (let i = 3; i >= 0; i--) if (S.seats[i] && S.seats[i].kind === 'b') { S.seats[i] = null; break; } };
 $('startBtn').onclick = () => { audio(); wakeLock(); newMatch(); };
@@ -1738,7 +1759,7 @@ function drawDomain(s, now){
   else if (hostT !== dxLocal.hostT) { dxLocal.hostT = hostT; dxLocal.at = now; }
   const t = Math.min(T.DOMAIN_TIME, hostT + Math.min(.15, (now - dxLocal.at) / 1000)), cue = dxLocal.cue;
   const cx = BW / 2, cy = BH / 2, gy = Math.round(BH * .7), end = T.DOMAIN_TIME;
-  if (!cue.start) { cue.start = 1; domainDrone(); }
+  if (!cue.start) { cue.start = 1; domainDrone(); sayDomain(); }
   b.save(); b.imageSmoothingEnabled = false;
   b.fillStyle = '#000'; b.fillRect(0, 0, BW, BH);
   const open = Math.max(0, Math.min(1, (t - .3) / .5));   // a crimson slit tears open across the dark
@@ -2288,9 +2309,23 @@ $('respawnBtn').onclick = () => { audio(); openRace(); };
 
 // ---- Sound (starts after the first tap, as iOS requires) -----------------------
 let AC = null;
+let speechReady = false;
 function audio(){
   if (!AC) { try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch { AC = null; } }
   if (AC && AC.state === 'suspended') AC.resume().catch(() => {});
+  if (!speechReady && window.speechSynthesis) {   // iOS only lets a page speak after a tap has spoken once
+    speechReady = true; try { speechSynthesis.speak(new SpeechSynthesisUtterance('')); } catch {}
+  }
+}
+// "Ryōiki tenkai" (domain expansion), in the device's own Japanese voice, low and slow.
+function sayDomain(){
+  try {
+    const ss = window.speechSynthesis; if (!ss) return;
+    const u = new SpeechSynthesisUtterance('領域展開');
+    u.lang = 'ja-JP'; u.pitch = .2; u.rate = .7; u.volume = 1;
+    const v = ss.getVoices().find(x => /^ja/i.test(x.lang)); if (v) u.voice = v;
+    ss.cancel(); ss.speak(u);
+  } catch {}
 }
 // Explosion: a pitch-dropping sub thump, a short burst of sample-held digital grit, a bit-crushed zap sweeping
 // down, and bright crackles that sputter out (the fizzle). Rendered once, then replayed at slightly varied pitch.
