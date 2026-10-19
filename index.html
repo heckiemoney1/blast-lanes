@@ -417,12 +417,15 @@ const T = {
   FUSE: 2.4, FLAME: 0.55, // seconds
   START_BOMBS: 1, START_RANGE: 2, MAX_BOMBS: 8, MAX_RANGE: 8,
   SOFT: 0.72, DROP: 0.4,  // soft-block density, power-up chance per block
-  SOFT_OPEN: 0.16,        // open arena: far fewer crates...
-  OPEN_UPS: 0.2, OPEN_RAIN: 0.8, OPEN_CAP: 45,    // ...power-ups on 20% of the floor at the start, one more every 0.8s up to 45
+  ROOM: 7,                // open arena: rooms 7 tiles across, linked by doorways
+  SOFT_OPEN: 0.16,        // far fewer crates...
+  OPEN_UPS: 0.12, OPEN_RAIN: 0.6, OPEN_CAP: 60,   // ...power-ups on 12% of the floor at the start, one more every 0.6s up to 60
+  VIEW_W: 13, VIEW_H: 17, // bigger arenas than this scroll with your fighter (with a minimap)
   OPEN_BOMBS: 2, OPEN_RANGE: 3,                    // and everyone starts with more firepower
   ROUND_TIME: 180,        // round clock; at 0 the remaining rings close faster
   SHRINK_START: 90,       // seconds into a round before the arena starts closing in, ring by ring
   SHRINK_EVERY: 20,       // seconds between rings
+  SHRINK_OPEN: [60, 10],  // the big rooms map: starts closing at 60s, a ring every 10s (it has many more rings)
   SHRINK_FAST: 4,         // seconds between rings once the clock runs out
   SHRINK_WARN: 4,         // seconds a ring flashes before it closes
   ULT_TIME: 2.8,          // secret finisher cinematic length (the match pauses for it)
@@ -486,12 +489,12 @@ let S = null;
 
 // Match options (host's lobby). env: a group ('mix' all, 'city', 'wild') = a different setting from it every round,
 // or one setting's index. map: classic, random shapes, or open (big open floor raining power-ups).
-// pw extra power-ups, hz arena hazards, gh ghost revenge, tm 2v2 teams, sx unlimited secret moves.
+// pw extra power-ups, hz arena hazards, gh ghost revenge, tm 2v2 teams.
 function loadOpts(){
   let o = {}; try { o = JSON.parse(store.get('bl-opts') || '{}') || {}; } catch {}
   const wt = Math.round(+o.wt), env = Number.isInteger(o.env) && o.env >= 0 && o.env < SETTINGS.length ? o.env : ENV_GROUPS[o.env] ? o.env : 'mix';
   return {wiki: o.wiki !== false, w1: o.w1 !== false, map: ['random', 'open'].includes(o.map) ? o.map : 'classic', wt: wt >= 1 && wt <= 10 ? wt : 5,
-    env, pw: o.pw !== false, hz: o.hz !== false, gh: o.gh !== false, tm: o.tm === true, sx: o.sx !== false};
+    env, pw: o.pw !== false, hz: o.hz !== false, gh: o.gh !== false, tm: o.tm === true};
 }
 function lobbyState(seats){
   return {ph: 'lobby', seats, opts: loadOpts(), wins: [0, 0, 0, 0], acks: [0, 0, 0, 0], rd: 0, last: -1, champ: -1, boom: 0};
@@ -516,13 +519,22 @@ function makeArena(shape, open){
     if (!inside(x, y)) g[i] = 3;
     else if (atEdge(x, y) || (!open && x % 2 === 0 && y % 2 === 0)) g[i] = 1;
   }
-  if (open) {   // cover: singles, pairs and L-shapes, kept off the corners where people spawn
-    const n = Math.round(N / 26);
-    for (let k = 0; k < n; k++) {
-      const x = 2 + ((Math.random() * (W - 4)) | 0), y = 2 + ((Math.random() * (H - 4)) | 0);
-      if (Math.min(x, W - 1 - x) + Math.min(y, H - 1 - y) < 5) continue;
-      const shapes = [[[0, 0]], [[0, 0], [1, 0]], [[0, 0], [0, 1]], [[0, 0], [1, 0], [0, 1]], [[0, 0], [1, 1]]];
-      for (const [dx, dy] of pick(shapes)) { const i = (y + dy) * W + x + dx; if (g[i] === 0 && !atEdge(x + dx, y + dy)) g[i] = 1; }
+  if (open) {
+    // Rooms: a grid of ROOM x ROOM rooms split by walls with doorways (sometimes a wall goes entirely, making a hall).
+    const R = T.ROOM + 1, door = new Set();
+    for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) if (x % R === 0 || y % R === 0) g[y * W + x] = 1;
+    const cut = (cells) => {   // open a doorway 2-3 wide in a wall segment, or the whole thing
+      const whole = Math.random() < .22, w = 2 + ((Math.random() * 2) | 0), at = 1 + ((Math.random() * (cells.length - w - 1)) | 0);
+      cells.forEach((i, k) => { if (whole || (k >= at && k < at + w)) { g[i] = 0; door.add(i); } });
+    };
+    for (let ry = 0; ry * R + R < H; ry++) for (let rx = 0; rx * R + R < W; rx++) {
+      const x0 = rx * R, y0 = ry * R;
+      if (x0 + R < W - 1) cut(Array.from({length: R - 1}, (_, k) => (y0 + 1 + k) * W + x0 + R));   // wall to the east
+      if (y0 + R < H - 1) cut(Array.from({length: R - 1}, (_, k) => (y0 + R) * W + x0 + 1 + k));   // wall to the south
+      for (let n = 0; n < 2; n++) {   // a bit of cover inside each room, away from its doorways
+        const x = x0 + 2 + ((Math.random() * (R - 3)) | 0), y = y0 + 2 + ((Math.random() * (R - 3)) | 0), i = y * W + x;
+        if (Math.random() < .7 && ![i - 1, i + 1, i - W, i + W].some(j => door.has(j))) { g[i] = 1; if (Math.random() < .4 && g[i + 1] === 0) g[i + 1] = 1; }
+      }
     }
   }
   // Keep only the biggest connected open area so nobody spawns walled off.
@@ -575,8 +587,7 @@ function mkPlayer(slot){
 }
 function newMatch(){
   S.seats = S.seats.map(s => (s && !s.gone) ? s : null);
-  S.wins = [0, 0, 0, 0]; S.rd = 0; S.champ = -1; S.ultUsed = [false, false, false, false]; S.domUsed = [false, false, false, false];
-  S.tsUsed = [false, false, false, false]; S.lnUsed = [false, false, false, false];
+  S.wins = [0, 0, 0, 0]; S.rd = 0; S.champ = -1;
   S.stats = [0, 1, 2, 3].map(() => ({k: 0, sk: 0, d: 0, ups: 0, bombs: 0, race: 0, comet: 0, gk: 0}));
   nextRound();
 }
@@ -588,9 +599,9 @@ function nextRound(){
     setDims(w, Math.min(17, w + pick([0, 2, 4])));
     a = makeArena(shape);
   }
-  if (S.opts.map === 'open') for (let k = 0; k < 30 && !a; k++) {
-    const big = S.seats.filter(Boolean).length > 2;
-    setDims(big ? 15 : 13, big ? 19 : 17);
+  if (S.opts.map === 'open') for (let k = 0; k < 30 && !a; k++) {   // 3x3 rooms for two players, 3x4 for more
+    const R = T.ROOM + 1, big = S.seats.filter(Boolean).length > 2;
+    setDims(3 * R + 1, (big ? 4 : 3) * R + 1);
     a = makeArena('rect', true);
   }
   if (!a) { setDims(11, 13); a = makeArena('rect'); }
@@ -611,7 +622,7 @@ function nextRound(){
   }
   S.rainT = T.OPEN_RAIN;
   Object.assign(S, {time: T.ROUND_TIME, elapsed: 0, cd: T.COUNTDOWN, ph: 'count', last: -1, ult: null, dom: null, ts: null, lance: null,
-    ringNext: 2, shrinkAt: T.SHRINK_START, warn: null, shrinkDone: false,
+    ringNext: 2, shrinkAt: S.opts.map === 'open' ? T.SHRINK_OPEN[0] : T.SHRINK_START, warn: null, shrinkDone: false,
     raceT: raceStart(S.opts.wt), raceDecayAt: T.RACE_DECAY_EVERY, decide: null});
 }
 // ---- Arena hazards (lobby toggle): two kinds per round, never on or next to a spawn.
@@ -730,7 +741,7 @@ function closeRing(){
     if (p.moving && shut.has(p.ty * W + p.tx)) { p.tx -= Math.sign(p.tx - p.x); p.ty -= Math.sign(p.ty - p.y); }   // bounce back out of the closing wall
   }
   S.warn = null; S.ringNext++;
-  S.shrinkAt = S.elapsed + (S.time > 0 ? T.SHRINK_EVERY : T.SHRINK_FAST);
+  S.shrinkAt = S.elapsed + (S.time > 0 ? (S.opts.map === 'open' ? T.SHRINK_OPEN[1] : T.SHRINK_EVERY) : T.SHRINK_FAST);
 }
 // Lobby slider "Wiki time" 1-10: 5 is RACE_TIME, each step is a fifth of it either way (1 = 8s, 10 = 80s).
 const raceStart = wt => T.RACE_TIME * (wt || 5) / 5;
@@ -864,14 +875,14 @@ function doAct(slot, a){
   if (a === 'b') dropBomb(p);
   else if (DIR[a] && p.q.length < T.QUEUE) p.q.push(a);
 }
-// Secret finisher (see tap() below): once per match, the player picks any enemy within ULT_REACH tiles and the
+// Secret finisher (see tap() below): the player picks any enemy within ULT_REACH tiles and the
 // match freezes for a cinematic. The victim gets a JUMP! prompt; hit it and make DODGE_GOAL in a mini 2048 to dodge.
-// Domain expansion (3 taps above the field, then 3 below): once per match, freezes the match for a cinematic and
+// Domain expansion (3 taps above the field, then 3 below): freezes the match for a cinematic and
 // cuts down every other fighter still standing.
 const busySecret = () => S.ult || S.dom || S.ts || S.lance;
 function tryStop(p){
-  if (!S.tsUsed || (S.tsUsed[p.slot] && !S.opts.sx) || busySecret()) return;
-  S.tsUsed[p.slot] = true; S.ts = {a: p.slot, t: 0};
+  if (busySecret()) return;   // secret moves have no limit, only one plays at a time
+  S.ts = {a: p.slot, t: 0};
   for (const o of S.players) if (o && o !== p) o.q = [];
 }
 // Void Lance aims itself down whichever row or column has the most enemies in the 3-wide band ahead.
@@ -884,7 +895,7 @@ function lanceBand(x0, y0, d){
   return out;
 }
 function tryLance(p){
-  if (!S.lnUsed || (S.lnUsed[p.slot] && !S.opts.sx) || busySecret()) return;
+  if (busySecret()) return;
   const x0 = Math.round(p.x), y0 = Math.round(p.y), foes = S.players.filter(o => o && o.alive && o !== p && !mates(o.slot, p.slot));
   let best = p.face, bn = -1, bd = 1e9;
   for (const d of 'udlr') {
@@ -892,7 +903,7 @@ function tryLance(p){
     const near = Math.min(1e9, ...hit.map(o => Math.abs(o.x - x0) + Math.abs(o.y - y0)));
     if (hit.length > bn || (hit.length === bn && near < bd)) { bn = hit.length; bd = near; best = d; }
   }
-  S.lnUsed[p.slot] = true; p.q = [];
+  p.q = [];
   S.lance = {a: p.slot, d: best, t: 0, x0, y0, cells: lanceBand(x0, y0, best)};
 }
 function tickLance(dt){
@@ -907,16 +918,14 @@ function tickLance(dt){
   if (L.t >= T.LANCE_WIND + T.LANCE_FIRE) S.lance = null;
 }
 function tryDomain(p){
-  if (!S.domUsed || (S.domUsed[p.slot] && !S.opts.sx) || busySecret()) return;
-  S.domUsed[p.slot] = true;
+  if (busySecret()) return;
   for (const o of S.players) if (o) o.q = [];
   S.dom = {a: p.slot, t: 0};
 }
 function tryUlt(p, vi){
   const best = S.players[vi];
-  if (!S.ultUsed || (S.ultUsed[p.slot] && !S.opts.sx) || !best || best === p || !best.alive || best.inv > 0 || mates(p.slot, vi) || S.ts || S.lance) return false;
+  if (!best || best === p || !best.alive || best.inv > 0 || mates(p.slot, vi) || S.ts || S.lance) return false;
   if (Math.max(Math.abs(Math.round(best.x) - Math.round(p.x)), Math.abs(Math.round(best.y) - Math.round(p.y))) > T.ULT_REACH) return false;
-  S.ultUsed[p.slot] = true;
   for (const o of S.players) if (o) o.q = [];
   S.ult = {a: p.slot, v: best.slot, t: 0, stage: 0, dodged: false};   // stages: 0 intro, 2 dodging (clock paused), 3 car
   return true;
@@ -1207,7 +1216,7 @@ function botThink(p, dt){
 function encode(){
   const s = {ph: S.ph, rd: S.rd, w: S.wins, k: S.acks, last: S.last, champ: S.champ,
     o: [S.opts.wiki ? 1 : 0, S.opts.w1 ? 1 : 0, ['classic', 'random', 'open'].indexOf(S.opts.map), S.opts.wt || 5, S.opts.env,
-      S.opts.pw ? 1 : 0, S.opts.hz ? 1 : 0, S.opts.gh ? 1 : 0, S.opts.tm ? 1 : 0, S.opts.sx ? 1 : 0],
+      S.opts.pw ? 1 : 0, S.opts.hz ? 1 : 0, S.opts.gh ? 1 : 0, S.opts.tm ? 1 : 0],
     seat: S.seats.map(x => x ? [x.name, x.kind, x.peer || 0, x.gone ? 1 : 0, x.ch | 0, x.ch === CUSTOM ? x.cu : 0] : 0)};
   if (S.ph === 'lobby') { if (S.tv) s.tv = S.tv; return s; }
   if (S.ph === 'round' && S.kc) s.kc = S.kc;
@@ -1804,7 +1813,7 @@ const SETTINGS = [
       R(1, 1, 14, 15, '#1a3a5a'); R(2, 2, 12, 13, '#7fc8f0'); R(2, 2, 12, 2, '#d8f4ff'); R(2, 2, 2, 12, '#b8e4ff');
       R(7, 5, 1, 4, '#4a9ad0'); R(8, 9, 2, 1, '#4a9ad0'); R(10, 10, 1, 3, '#4a9ad0'); R(2, 14, 12, 1, '#3a7ab0'); })},
 ];
-// The Wilds: inspired by the biomes of Magicite. Near-black ground where the color comes from bright, jagged grass
+// The Wilds: inspired by the biomes of Magicite. Dark ground where the color comes from bright, jagged grass
 // crusts, tall thin plants and things that glow. Drawn in chunky doubled pixels (an 8x8 grid per tile).
 function chunky(fn){ return tile((R, g) => fn((x, y, w, h, col) => R(x * 2, y * 2, w * 2, h * 2, col), g)); }
 // A block of dark earth: its top crusted in the biome's grass, a bright jagged lip spilling over its face.
@@ -1833,8 +1842,8 @@ const darkFloor = (base, speck, tuft, tuft2) => (R, x, y, r) => {
 };
 const motes = col => (R, x, y, r) => { if (r() < .08) R(((r() * 7) | 0) * 2, ((r() * 7) | 0) * 2, 2, 2, col); };
 SETTINGS.push(
-  {name: 'Deep Forest', grp: 'wild', amb: 'rgb(64,82,66)', fx: 'fireflies', neon: '#6ac03a', neon2: '#2de2c0',
-    floor: darkFloor('#070906', '#11180d', '#2c5a1e', '#4f9a2a'), glow: motes('#6ac03a'),
+  {name: 'Deep Forest', grp: 'wild', amb: 'rgb(112,136,114)', fx: 'fireflies', neon: '#6ac03a', neon2: '#2de2c0',
+    floor: darkFloor('#1e2a18', '#2a3a22', '#2c5a1e', '#4f9a2a'), glow: motes('#6ac03a'),
     walls: () => {
       const P = {top: '#1d3a16', tuft: '#3f7a26', dirt: '#0b0d09', speck: '#181c12', lip: '#6ac03a', hi: '#a8e860'};
       return [earth(P), earth(P), earth(P, R => {   // a layered canopy tree on a thin trunk
@@ -1843,8 +1852,8 @@ SETTINGS.push(
     },
     lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#6ac03a' : null,
     crate: () => ore('#5fbf3a', '#c8ff9a')},
-  {name: 'Spore Swamp', grp: 'wild', amb: 'rgb(66,66,92)', fx: 'motes', neon: '#7a3aff', neon2: '#3ad6c0',
-    floor: darkFloor('#06070a', '#10121a', '#1e3a3a', '#2a6a5a'), glow: motes('#3ad6c0'),
+  {name: 'Spore Swamp', grp: 'wild', amb: 'rgb(112,112,144)', fx: 'motes', neon: '#7a3aff', neon2: '#3ad6c0',
+    floor: darkFloor('#1a1e28', '#262c3a', '#1e3a3a', '#2a6a5a'), glow: motes('#3ad6c0'),
     walls: () => {
       const P = {top: '#14222a', tuft: '#1e4a4a', dirt: '#08090c', speck: '#12141c', lip: '#2a8a6a', hi: '#4fd0b0'};
       return [earth(P), earth(P), earth(P, R => {   // a green vine with purple leaves
@@ -1853,8 +1862,8 @@ SETTINGS.push(
     },
     lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#7a3aff' : null,
     crate: () => ore('#3ad6c0', '#c8fff0')},
-  {name: 'Red Veldt', grp: 'wild', amb: 'rgb(92,64,66)', fx: 'petals', neon: '#ff6a6a', neon2: '#ff9a7a',
-    floor: darkFloor('#0b0505', '#1c0c0c', '#5a1a1a', '#a02a2a'), glow: motes('#ff8a8a'),
+  {name: 'Red Veldt', grp: 'wild', amb: 'rgb(144,110,112)', fx: 'petals', neon: '#ff6a6a', neon2: '#ff9a7a',
+    floor: darkFloor('#2a1416', '#3a1c1e', '#5a1a1a', '#a02a2a'), glow: motes('#ff8a8a'),
     walls: () => {
       const P = {top: '#3a0e10', tuft: '#6a1a1c', dirt: '#0c0606', speck: '#1e0c0c', lip: '#c03030', hi: '#ff6a5a'};
       return [earth(P), earth(P), earth(P, R => {   // a pink pom-pom flower on a leafy stalk
@@ -1864,8 +1873,8 @@ SETTINGS.push(
     },
     lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#ff8a8a' : null,
     crate: () => ore('#ff7a9a', '#ffd8e0')},
-  {name: 'Crystal Quarry', grp: 'wild', amb: 'rgb(72,74,100)', fx: 'sparkle', neon: '#a08aff', neon2: '#7af0e8',
-    floor: darkFloor('#06070b', '#121624', '#2a2a4a', '#4a4a7a'), glow: motes('#c8b8ff'),
+  {name: 'Crystal Quarry', grp: 'wild', amb: 'rgb(118,120,152)', fx: 'sparkle', neon: '#a08aff', neon2: '#7af0e8',
+    floor: darkFloor('#1c1e2e', '#2a2e44', '#2a2a4a', '#4a4a7a'), glow: motes('#c8b8ff'),
     walls: () => {
       const P = {top: '#1a1a30', tuft: '#2e2e52', dirt: '#08080e', speck: '#14142a', lip: '#6a5ad0', hi: '#c8b8ff'};
       return [earth(P), earth(P), earth(P, R => {   // a glowing lavender crystal branch
@@ -1875,8 +1884,8 @@ SETTINGS.push(
     },
     lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#c8b8ff' : null,
     crate: () => ore('#7af0e8', '#ffffff')},
-  {name: 'Volcano', grp: 'wild', amb: 'rgb(96,64,56)', fx: 'embers', neon: '#ff6a1a', neon2: '#ffb03a',
-    floor: darkFloor('#0a0504', '#1e0c08', '#3a1408', '#5a2008'),
+  {name: 'Volcano', grp: 'wild', amb: 'rgb(148,110,98)', fx: 'embers', neon: '#ff6a1a', neon2: '#ffb03a',
+    floor: darkFloor('#2a1612', '#3a1e18', '#3a1408', '#5a2008'),
     glow(R, x, y, r){ if (hash(x, y, 11) < .2) { R(2, 8, 6, 2, '#ff5a1a'); R(8, 10, 6, 2, '#ff7a1a'); } },
     walls: () => {
       const P = {top: '#3a1408', tuft: '#5a2008', dirt: '#0c0504', speck: '#22100a', lip: '#ff6a1a', hi: '#ffc040'};
@@ -1886,8 +1895,8 @@ SETTINGS.push(
     },
     lamp: (x, y) => hash(x, y, 1) * 3 >= 2 ? '#ff7a1a' : null,
     crate: () => ore('#ff7a1a', '#ffd23f')},
-  {name: 'Cosmic Crater', grp: 'wild', amb: 'rgb(74,62,100)', fx: 'cosmic', neon: '#c03ad0', neon2: '#3ad6e8',
-    floor(R, x, y, r){ darkFloor('#06040b', '#120c1e', '#2a1a4a', '#4a2a7a')(R, x, y, r); if (r() < .3) R(((r() * 8) | 0) * 2, ((r() * 8) | 0) * 2, 1, 1, r() < .7 ? '#e8e0ff' : '#ff9ae8'); },
+  {name: 'Cosmic Crater', grp: 'wild', amb: 'rgb(122,108,152)', fx: 'cosmic', neon: '#c03ad0', neon2: '#3ad6e8',
+    floor(R, x, y, r){ darkFloor('#1e1630', '#2c2244', '#2a1a4a', '#4a2a7a')(R, x, y, r); if (r() < .3) R(((r() * 8) | 0) * 2, ((r() * 8) | 0) * 2, 1, 1, r() < .7 ? '#e8e0ff' : '#ff9ae8'); },
     glow: motes('#3ad6e8'),
     walls: () => {
       const P = {top: '#1e0c2e', tuft: '#3a1a5a', dirt: '#07040c', speck: '#160c24', lip: '#b03ad0', hi: '#ff7ae8'};
@@ -1900,6 +1909,30 @@ SETTINGS.push(
       R(0, 1, 8, 7, OUT); R(1, 1, 6, 6, '#5a4a4a'); R(1, 1, 6, 1, '#7a6a66'); R(2, 4, 1, 1, '#3a2e2e'); R(5, 2, 1, 1, '#3a2e2e');
       R(2, 2, 1, 1, '#ff7ae0'); R(3, 3, 1, 1, '#ff7ae0'); R(4, 4, 1, 1, '#ffd0f4'); R(5, 5, 1, 1, '#ff7ae0'); })},
 );
+// Sunlit Ruins: the one daytime place. Pastel grass and flowers, pale broken stonework under ivy, clay urns.
+SETTINGS.push({name: 'Sunlit Ruins', grp: 'wild', day: true, amb: 'rgb(238,242,228)', fx: 'pollen', neon: '#fff2b0', neon2: '#b8f0a0',
+  floor(R, x, y, r){
+    if (hash(x, y, 21) < .16) {   // a broken flagstone path
+      R(0, 0, TS, TS, '#a8d8a0'); R(2, 2, 6, 6, '#dcd8c8'); R(10, 4, 4, 4, '#d4d0c0'); R(4, 10, 8, 4, '#dcd8c8'); R(5, 4, 2, 1, '#bab6a6'); return;
+    }
+    R(0, 0, TS, TS, (x + y) & 1 ? '#a8d8a0' : '#a2d29a');
+    for (let k = 0; k < 3; k++) { const a = ((r() * 7) | 0) * 2, c = ((r() * 6) | 0) * 2 + 2; R(a, c, 2, 4, '#86c07c'); R(a + 2, c + 2, 2, 2, '#6aa862'); }
+    if (r() < .35) { const a = ((r() * 6) | 0) * 2 + 2, c = ((r() * 6) | 0) * 2 + 2; R(a, c, 2, 2, pick(['#ffffff', '#ffb8d0', '#fff08a'])); }
+  },
+  walls: () => [
+    chunky(R => {   // a block of old stonework, mossy on top
+      R(0, 0, 8, 5, '#dcd8c8'); R(0, 0, 3, 1, '#8ac878'); R(5, 1, 2, 1, '#8ac878'); R(1, 2, 1, 1, '#c4c0b0'); R(5, 3, 2, 1, '#c4c0b0');
+      R(0, 5, 8, 3, '#a8a494'); R(3, 5, 1, 2, '#8a8676'); R(0, 6, 8, 1, '#8a8676'); R(6, 6, 1, 2, '#8a8676'); R(0, 5, 8, 1, '#bcb8a8'); }),
+    chunky(R => {   // ivy-covered
+      R(0, 0, 8, 5, '#dcd8c8'); R(0, 5, 8, 3, '#a8a494'); R(0, 6, 8, 1, '#8a8676');
+      R(1, 0, 3, 2, '#6aa862'); R(2, 2, 1, 4, '#5a9852'); R(5, 1, 2, 1, '#86c07c'); R(6, 2, 1, 5, '#5a9852'); R(3, 4, 1, 1, '#86c07c'); }),
+    chunky(R => {   // a broken column
+      R(0, 0, 8, 5, '#a8d8a0'); R(1, 0, 6, 5, '#e8e4d6'); R(1, 0, 6, 1, '#f4f2e8'); R(2, 1, 1, 4, '#cfcbbb'); R(5, 1, 1, 4, '#cfcbbb');
+      R(0, 5, 8, 3, '#b4b0a0'); R(0, 5, 8, 1, '#c8c4b4'); R(4, 0, 2, 1, '#a8d8a0'); })],
+  crate: () => chunky(R => {   // a clay urn
+    R(1, 1, 6, 7, '#5a3a22'); R(2, 1, 4, 1, '#9a5a32'); R(2, 2, 4, 5, '#d8925a'); R(1, 3, 6, 3, '#d8925a'); R(2, 3, 1, 2, '#f0b07a');
+    R(2, 5, 4, 1, '#a86a3a'); R(4, 3, 1, 1, '#6aa862'); }),
+});
 for (const E of SETTINGS) E.grp = E.grp || 'city';
 const ENV_GROUPS = {
   mix: () => SETTINGS.map((_, i) => i),
@@ -1921,9 +1954,9 @@ function envArt(ei, rd){
   if (envCache.size > 24) envCache.clear();
   envCache.set(key, f); return f;
 }
-const BOMB = ['#3a3058', '#ff2a5a'].map(body => sprite([
+const BOMB = ['#544a80', '#ff2a5a'].map(body => sprite([
   '..........', '...kkkk...', '..kbbbbk..', '.kbwbbbbk.', '.kbwbbbbbk'.slice(0, 10), '.kbbbbbbk.', '.kbbbbbbk.', '..kbbbbk..', '...kkkk...', '..........'
-].map(r => r.padEnd(10, '.')), {k: '#0e0a16', b: body, w: '#8a7fb5'}, true));
+].map(r => r.padEnd(10, '.')), {k: '#0e0a16', b: body, w: '#c0b8ee'}, true));
 const UPS = [
   sprite(['......y...', '.....k....', '...kkkk...', '..kbbbbk..', '.kbwbbbbk.', '.kbbbbbbk.', '.kbbbbbbk.', '..kbbbbk..', '...kkkk...'],
     {y: '#ffe08a', k: '#0e0a16', b: '#ff2a6d', w: '#ffc2d6'}, true),
@@ -2136,7 +2169,7 @@ function renderLobby(s){
   if (WIKI_OK) items.push(['wiki', 'Wiki respawn', on(o[0]), false], ['w1', 'Wiki 1v1', on(o[1]), !o[0]]);
   items.push(['map', 'Map', ['Classic', 'Random', 'Open'][+o[2]] || 'Classic', false], ['tm', 'Teams', o[8] ? '2v2' : 'Off', false],
     ['pw', 'Power-ups+', on(o[5] !== 0), false], ['hz', 'Hazards', on(o[6] !== 0), false], ['gh', 'Ghosts', on(o[7] !== 0), false],
-    ['sx', 'Secrets', o[9] === 0 ? 'Once' : 'Unlimited', false]);
+  );
   for (const [k, label, val, muted] of items) {
     const bt = document.createElement('button'); bt.type = 'button'; bt.className = 'opt' + (muted ? ' muted' : '');
     const v = document.createElement('b'); v.textContent = val; if (val === 'Off') v.className = 'off';
@@ -2213,7 +2246,7 @@ function tap(x, y){
   if (g2048) return;
   const fr = cv.getBoundingClientRect(), now = performance.now();
   if (aim && now < aim.until) {   // aiming: only a tap on a marked enemy does anything
-    const tx = (x - fr.left) / fr.width * W, ty = (y - fr.top) / fr.height * H, ps = snap && snap.p;
+    const tx = (view.x + (x - fr.left) / fr.width * view.w) / TS, ty = (view.y + (y - fr.top) / fr.height * view.h) / TS, ps = snap && snap.p;
     let pickI = -1, bd = 1.2;
     for (const i of aimTargets()) { const d = Math.hypot(tx - (ps[i][0] / 100 + .5), ty - (ps[i][1] / 100 + .4)); if (d < bd) { bd = d; pickI = i; } }
     if (pickI >= 0) { aim = null; sendAct('ghij'[pickI]); }
@@ -2306,10 +2339,24 @@ const buf = cnv(BW, BH), b = buf.getContext('2d');
 const glowC = cnv(BW, BH), gl = glowC.getContext('2d');   // colored lights only
 const lightC = cnv(BW, BH), lc = lightC.getContext('2d'); // ambient + lights, multiplied over the scene
 let SCALE = 2;
+// The camera: the part of the arena on screen, in art pixels. Normally all of it; on arenas bigger than
+// VIEW_W x VIEW_H it follows your fighter, and pulls back to the whole map when you're out or watching.
+const view = {x: 0, y: 0, w: 0, h: 0, on: false};
+function updateView(mine, s, dt){
+  const follow = (W > T.VIEW_W || H > T.VIEW_H) && !!mine && !NET.tv && !replaying && s.ph !== 'round' && !Array.isArray(s.ul) && !Array.isArray(s.dx);
+  const w = follow ? Math.min(BW, T.VIEW_W * TS) : BW, h = follow ? Math.min(BH, T.VIEW_H * TS) : BH;
+  const snapTo = w !== view.w || h !== view.h || follow !== view.on;
+  if (w !== view.w || h !== view.h) { view.w = w; view.h = h; layout(); }
+  view.on = follow;
+  if (!follow) { view.x = view.y = 0; return; }
+  const tx = Math.max(0, Math.min(BW - w, mine.x * TS + 8 - w / 2)), ty = Math.max(0, Math.min(BH - h, mine.y * TS + 8 - h / 2));
+  const k = snapTo ? 1 : 1 - Math.exp(-dt * 9);
+  view.x += (tx - view.x) * k; view.y += (ty - view.y) * k;
+}
 // Arena size changed (random maps): resize the working canvases to match.
 function setDims(w, h){
   if (w === W && h === H) return;
-  W = w; H = h; N = W * H; BW = W * TS; BH = H * TS;
+  W = w; H = h; N = W * H; BW = W * TS; BH = H * TS; view.w = BW; view.h = BH; view.on = false;
   for (const c of [buf, glowC, lightC, chR, chC]) { c.width = BW; c.height = BH; }
   VIGNETTE = makeVignette(); psy.sample = null; disp.fill(null);
   if (screen === 'game') layout();
@@ -2318,9 +2365,9 @@ function layout(){
   const st = $('stage'), dpr = Math.min(3, devicePixelRatio || 1);
   // Whole-number scaling keeps pixels crisp; but if that would waste over a quarter of the space (big arenas on
   // 2x screens), scale by a fraction instead.
-  const fit = Math.min(st.clientWidth * dpr / BW, st.clientHeight * dpr / BH);
+  const vw = view.w || BW, vh = view.h || BH, fit = Math.min(st.clientWidth * dpr / vw, st.clientHeight * dpr / vh);
   SCALE = Math.max(1, Math.floor(fit) / fit < .75 ? fit : Math.floor(fit));
-  cv.width = Math.round(BW * SCALE); cv.height = Math.round(BH * SCALE);
+  cv.width = Math.round(vw * SCALE); cv.height = Math.round(vh * SCALE);
   cv.style.width = cv.width / dpr + 'px'; cv.style.height = cv.height / dpr + 'px';
 }
 addEventListener('resize', () => { if (screen === 'game') layout(); });
@@ -2457,7 +2504,7 @@ let wx = [], wxKind = '', thunderAt = 0;
 function weather(kind, dt, now){
   if (reduce || kind === 'none' || !kind) { wx = []; return; }
   if (kind !== wxKind) { wx = []; wxKind = kind; }
-  const want = {rain: 70, snow: 40, data: 26, steam: 14, bubbles: 16, fireflies: 14, spores: 22, petals: 18, sparkle: 18, embers: 26, cosmic: 12, motes: 18}[kind] || 0;
+  const want = Math.min(3, Math.max(1, N / 143)) * {rain: 70, snow: 40, data: 26, steam: 14, bubbles: 16, fireflies: 14, spores: 22, petals: 18, sparkle: 18, embers: 26, cosmic: 12, motes: 18, pollen: 22}[kind] || 0;
   while (wx.length < want) wx.push({x: Math.random() * BW, y: Math.random() * BH, v: Math.random(), age: Math.random() * 3});
   for (const p of wx) {
     p.age += dt;
@@ -2487,6 +2534,18 @@ function weather(kind, dt, now){
       if (p.y < -2 || p.age > 6) { p.y = BH + 2; p.x = Math.random() * BW; p.age = 0; }
       b.fillStyle = kind === 'embers' ? `rgba(255,${140 + ((p.v * 100) | 0)},40,${.9 - p.age / 7})` : `rgba(200,120,255,${.55 - p.age / 12})`;
       b.fillRect(p.x | 0, p.y | 0, 1, kind === 'embers' && p.v < .3 ? 2 : 1);
+    } else if (kind === 'pollen') {   // pollen drifting on a breeze, and a few butterflies flapping about
+      if (p.v < .15) {
+        p.x += Math.sin(p.age * .7 + p.v * 40) * dt * 16 + dt * 4; p.y += Math.cos(p.age * .9 + p.v * 30) * dt * 10;
+        if (p.x < -4 || p.x > BW + 4 || p.y < -4 || p.y > BH + 4) { p.x = Math.random() * BW; p.y = Math.random() * BH; }
+        const open = ((p.age * 9) | 0) & 1, col = p.v < .07 ? '#ffffff' : '#ffb8d0';
+        b.fillStyle = col; b.fillRect((p.x | 0) - (open ? 2 : 1), p.y | 0, open ? 2 : 1, 2); b.fillRect((p.x | 0) + 1, p.y | 0, open ? 2 : 1, 2);
+        b.fillStyle = '#5a3a22'; b.fillRect(p.x | 0, p.y | 0, 1, 2);
+      } else {
+        p.x += dt * (6 + p.v * 8); p.y += Math.sin(p.age + p.v * 9) * dt * 3;
+        if (p.x > BW + 2) { p.x = -2; p.y = Math.random() * BH; }
+        b.fillStyle = `rgba(255,250,200,${.5 + .3 * Math.sin(p.age * 3 + p.v * 20)})`; b.fillRect(p.x | 0, p.y | 0, 1, 1);
+      }
     } else if (kind === 'motes') {   // chunky cyan specks hanging in the dark, slowly drifting
       p.x += Math.sin(p.age * .4 + p.v * 20) * dt * 4; p.y -= dt * (1.5 + p.v * 3);
       if (p.y < -2 || p.age > 14) { p.y = Math.random() * BH; p.x = Math.random() * BW; p.age = 0; }
@@ -2671,7 +2730,8 @@ function drawGame(s, dt, now){
   b.globalCompositeOperation = 'lighter'; b.globalAlpha = .35; b.drawImage(glowC, 0, 0); b.globalAlpha = 1;
   b.globalCompositeOperation = 'source-over';
   weather(E.fx, dt, now);
-  b.drawImage(VIGNETTE, 0, 0);
+  if (E.day) b.globalAlpha = .35;
+  b.drawImage(VIGNETTE, 0, 0); b.globalAlpha = 1;
 
   if (hzs && Array.isArray(s.lz)) drawLaser(hzs, s.lz, now, false);
   drawGhosts(s, now, seats, me);
@@ -2727,9 +2787,33 @@ function drawGame(s, dt, now){
   }
 
   // upscale; shake moves by whole art pixels
+  updateView(order.find(o => o.i === me), s, dt);
   let ox = 0, oy = 0;
   if (shake > 0) { shake -= dt; ox = Math.round((Math.random() - .5) * 3) * SCALE; oy = Math.round((Math.random() - .5) * 3) * SCALE; }
   blit(ox, oy, dt, now);
+  if (view.on) minimap(str, order, s, me);
+}
+// Minimap (only while the camera is following you): walls, fighters, bombs, and the part you can see.
+let miniC = null, miniKey = '';
+function minimap(str, order, s, me){
+  if (miniKey !== str || !miniC || miniC.width !== W) {
+    miniKey = str; miniC = cnv(W, H); const g = miniC.getContext('2d');
+    for (let i = 0; i < N; i++) { const c = str[i]; g.fillStyle = c === '1' ? '#8a84a0' : c === '2' ? '#5a4a3a' : c === '3' ? '#000' : '#1a1624'; g.fillRect(i % W, (i / W) | 0, 1, 1); }
+  }
+  const mw = Math.round(cv.width * .3), mh = Math.round(mw * H / W), x0 = cv.width - mw - 6, y0 = 6, u = mw / W;
+  ctx.save(); ctx.imageSmoothingEnabled = false; ctx.globalAlpha = .8;
+  ctx.fillStyle = '#000'; ctx.fillRect(x0 - 2, y0 - 2, mw + 4, mh + 4);
+  ctx.drawImage(miniC, x0, y0, mw, mh);
+  ctx.globalAlpha = 1; ctx.fillStyle = '#ff2a5a';
+  for (const bm of Array.isArray(s.b) ? s.b : []) ctx.fillRect(x0 + bm[0] * u, y0 + bm[1] * u, Math.max(2, u), Math.max(2, u));
+  for (const o of order) {
+    const r = Math.max(3, u * 1.4);
+    ctx.fillStyle = '#000'; ctx.fillRect(x0 + (o.x + .5) * u - r / 2 - 1, y0 + (o.y + .5) * u - r / 2 - 1, r + 2, r + 2);
+    ctx.fillStyle = COLORS[o.i]; ctx.fillRect(x0 + (o.x + .5) * u - r / 2, y0 + (o.y + .5) * u - r / 2, r, r);
+  }
+  ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = Math.max(1, u * .4);
+  ctx.strokeRect(x0 + view.x / TS * u, y0 + view.y / TS * u, view.w / TS * u, view.h / TS * u);
+  ctx.restore();
 }
 
 // ---- Domain expansion cinematic: the world goes black, a crimson sky splits open, a fanged shrine rises,
@@ -3018,6 +3102,7 @@ function psyK(now){   // 0..1: slams in, holds, settles to a lingering haze whil
 }
 function blit(ox, oy, dt, now){
   const S = SCALE, k = psyK(now);
+  ox -= Math.round(view.x * S); oy -= Math.round(view.y * S);   // the camera
   ctx.imageSmoothingEnabled = false; ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
   if (k <= 0) { ctx.drawImage(buf, ox, oy, BW * S, BH * S); drawBursts(dt, now, ox, oy); return; }
@@ -3265,7 +3350,7 @@ function present(s, dt, now){
   if (s.ph === 'lobby') { endPsy(); closeRace(); show('lobby'); renderLobby(s); return; }
   lobbyKey = '';
   const dm = Array.isArray(s.dm) ? s.dm.map(Number) : [11, 13];
-  if (dm.every(v => Number.isInteger(v) && v >= 5 && v <= 21)) setDims(dm[0], dm[1]);
+  if (dm.every(v => Number.isInteger(v) && v >= 5 && v <= 40)) setDims(dm[0], dm[1]);
   if (!cam) camRecord(s, now);
   if (cam || (s.ph === 'round' && Array.isArray(s.kc) && camStart(s, now))) {
     show('game'); camDraw(dt, now); renderHud(s); renderBanner(s); $('banner').style.visibility = cam ? 'hidden' : ''; return;
