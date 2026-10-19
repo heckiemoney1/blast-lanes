@@ -317,7 +317,7 @@
       <button id="leaveOver" class="ghost">Leave</button>
     </div>
   </div>
-  <div class="hint"><span><b>swipe</b> step · <b>tap</b> bomb</span><button id="leaveGame" class="ghost">Quit</button></div>
+  <div class="hint"><span id="hintText"><b>swipe</b> step · <b>tap</b> bomb</span><button id="leaveGame" class="ghost">Quit</button></div>
 </section>
 
 <!-- RESPAWN WIKIRACE -->
@@ -361,7 +361,8 @@ const T = {
   WINS: 3, COUNTDOWN: 3, ROUND_PAUSE: 3.2,
   BOT_THINK: 0.14,
   SWIPE_PX: 22, TAP_MS: 320,
-  NET_HZ: 20, HOST_TIMEOUT: 6,
+  NET_HZ: 20, HOST_TIMEOUT: 15,   // seconds without the host before a phone gives up
+  DROP_GRACE: 15,         // seconds a seated player may vanish (phone signal blips) before losing the seat
   AMBIENT: 'rgb(112,100,150)',   // how dark the unlit field is (lower = darker)
   RACE_TIME: 40,          // seconds allowed for a respawn wikirace at the start of a round,
   RACE_DECAY: 0.8,        // multiplied by this every RACE_DECAY_EVERY seconds of play
@@ -798,7 +799,7 @@ const RELAYS = window.BL_RELAYS || ['wss://broker.emqx.io:8084/mqtt', 'wss://bro
 function relayNet(){
   async function openRoom(url, name){
     const id = 'bl' + Math.random().toString(36).slice(2, 12), base = 'blastlanes/1/' + name, mine = base + '/p/' + id;
-    const c = mqtt.connect(url, {clientId: id, clean: true, keepalive: 10, connectTimeout: 6000, reconnectPeriod: 2000,
+    const c = mqtt.connect(url, {clientId: id, clean: true, keepalive: 15, connectTimeout: 6000, reconnectPeriod: 1500,
       will: {topic: mine, payload: '', retain: true, qos: 0}});
     c.on('error', () => {});
     await new Promise((res, rej) => {
@@ -906,7 +907,8 @@ async function openJoin(code){
   NET.game.presence({r: 'p', nm: myName(), ch: myChar, cu: myChar === CUSTOM ? myCustom : null, a: []}).catch(() => {});
 }
 function leave(msg){
-  if (NET.game) { NET.game.leave().catch(() => {}); NET.game = null; }
+  if (NET.game && NET.role === 'client') NET.game.presence({bye: 1}).catch(() => {});   // tell the host this is on purpose
+  if (NET.game) { const g = NET.game; setTimeout(() => g.leave().catch(() => {}), 150); NET.game = null; }
   if (NET.role === 'host' && NET.room) NET.room.presence({host: null, hn: null, n: null, ph: null}).catch(() => {});
   NET.role = null; NET.lobbyKey = ''; S = null; snap = null; endPsy(); closeRace(); bursts = [];
   show('home'); renderGames();
@@ -914,10 +916,15 @@ function leave(msg){
 }
 
 function hostSync(){
-  const byPeer = new Map();
+  const byPeer = new Map(), now = performance.now();
   for (const p of NET.game.peers()) if (!p.sameTab && p.presence && p.presence.r === 'p') byPeer.set(p.peer, p);
   S.seats.forEach((s, i) => {
-    if (!s || s.kind !== 'p' || byPeer.has(s.peer)) return;
+    if (!s || s.kind !== 'p' || s.gone) return;
+    const p = byPeer.get(s.peer);
+    if (p && p.presence.bye) s.bye = true;            // tapped Leave: free the seat right away
+    if (p && !s.bye) { s.lost = 0; return; }
+    if (!s.lost) s.lost = now;
+    if (!s.bye && now - s.lost < T.DROP_GRACE * 1000) return;   // mobile signal blip: keep the seat a while
     if (S.ph === 'lobby') S.seats[i] = null;
     else { s.gone = true; const pl = S.players && S.players[i]; if (pl) { pl.alive = false; pl.racing = false; } }
   });
@@ -1878,7 +1885,14 @@ function present(s, dt, now){
   const dm = Array.isArray(s.dm) ? s.dm.map(Number) : [11, 13];
   if (dm.every(v => Number.isInteger(v) && v >= 5 && v <= 21)) setDims(dm[0], dm[1]);
   show('game'); drawGame(s, dt, now); renderHud(s); renderBanner(s); syncRespawn(s, now); syncDodge(s, now);
+  const watching = NET.role === 'client' && mySlot() < 0;
+  if (watching !== $('hintText').classList.contains('watching')) {
+    $('hintText').classList.toggle('watching', watching);
+    if (watching) $('hintText').textContent = "Watching. You'll get a seat next match.";
+    else $('hintText').innerHTML = HINT_HTML;
+  }
 }
+const HINT_HTML = $('hintText').innerHTML;
 
 // ---- Dodging the finisher: half a second to hit JUMP!, then 5 seconds of 2048 to reach 128 ----
 let qte = null, g2048 = null;
@@ -1963,21 +1977,39 @@ const pick = a => a[(Math.random() * a.length) | 0];
 async function wapi(params){
   const u = new URL('https://en.wikipedia.org/w/api.php');
   for (const k in Object.assign(params, {format: 'json', formatversion: '2', origin: '*'})) u.searchParams.set(k, params[k]);
-  const r = await fetch(u); if (!r.ok) throw new Error('wiki ' + r.status);
-  return r.json();
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const r = await fetch(u, {signal: ctl.signal});
+    if (!r.ok) throw new Error('wiki ' + r.status);
+    return await r.json();
+  } finally { clearTimeout(tm); }
+}
+const offline = e => e && (e.name === 'TypeError' || e.name === 'AbortError');   // fetch couldn't reach Wikipedia at all
+// Pages that link to t: a random slice of Wikipedia search results for linksto:"t" (backlinks come back
+// alphabetical, which for big articles is mostly year and number pages).
+async function linkers(t){
+  for (const off of [(Math.random() * 150) | 0, 0]) {
+    const j = await wapi({action: 'query', list: 'search', srsearch: 'linksto:"' + t + '"', srnamespace: 0, srlimit: 50, sroffset: off, srprop: ''});
+    const l = ((j.query && j.query.search) || []).map(x => x.title).filter(goodTitle);
+    if (l.length) return l;
+  }
+  return backlinks(t);
 }
 async function backlinks(t){
   const j = await wapi({action: 'query', list: 'backlinks', bltitle: t, blnamespace: 0, blfilterredir: 'nonredirects', bllimit: 300});
   return ((j.query && j.query.backlinks) || []).map(x => x.title).filter(goodTitle);
 }
 async function makeRace(){
-  const target = pick(TARGETS), l1 = await backlinks(target);
-  if (!l1.length) throw new Error('no links');
-  const mid = pick(l1), l2 = (await backlinks(mid)).filter(t => !sameTitle(t, target));
-  return {target, start: l2.length ? pick(l2) : mid};
+  for (let tries = 0; tries < 3; tries++) {
+    const target = pick(TARGETS), l1 = (await linkers(target)).filter(t => !sameTitle(t, target));
+    if (!l1.length) continue;
+    const mid = pick(l1), l2 = (await linkers(mid)).filter(t => !sameTitle(t, target) && !sameTitle(t, mid));
+    return {target, start: l2.length ? pick(l2) : mid};
+  }
+  throw new Error('no route');
 }
 let raceP = null, race = null;
-function prefetchRace(){ if (WIKI_OK && !raceP) raceP = makeRace().catch(() => null); }
+function prefetchRace(){ if (WIKI_OK && !raceP) raceP = makeRace().catch(e => ({error: e})); }
 
 // The host decides who may race (flag 2) and keeps each race's clock (flag 1 + seconds left).
 function syncRespawn(s, now){
@@ -2009,7 +2041,10 @@ async function openRace(){
   prefetchRace();
   const r = await raceP; raceP = null;
   if (!race) return;
-  if (!r) { closeRace(); return toast("Couldn't reach Wikipedia. Check your connection."); }
+  if (!r || r.error) {
+    closeRace();
+    return toast(r && !offline(r.error) ? "Couldn't find a route this time. Tap Respawn to try again." : "Couldn't reach Wikipedia. Check your connection and tap Respawn again.");
+  }
   race.target = r.target; $('wTarget').textContent = r.target;
   sendAct('w');
   race.t0 = race.sent = performance.now();
