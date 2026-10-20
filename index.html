@@ -135,7 +135,7 @@
   .clock small{display:block; font:400 9px var(--pix); letter-spacing:1px; color:var(--dim); margin-top:3px}
   .clock.sd{color:var(--hot); text-shadow:0 0 8px var(--hot)}
   .stage{position:relative; width:100%; max-width:540px; flex:1; min-height:0; display:flex; align-items:center; justify-content:center}
-  #cv{display:block; box-shadow:0 0 0 2px #000, 0 0 40px rgba(255,42,90,.15)}
+  #cv{display:block; box-shadow:0 0 0 2px #000, 0 0 40px rgba(255,42,90,.15); image-rendering:crisp-edges; image-rendering:pixelated}
   .banner{position:absolute; left:0; right:0; top:50%; transform:translateY(-50%); text-align:center; pointer-events:none;
     font:700 clamp(24px,9vw,48px) var(--pix); letter-spacing:1px; text-shadow:3px 0 rgba(255,42,90,.8), -3px 0 rgba(45,226,230,.8), 0 4px 24px #000}
   .banner.top{top:14%}
@@ -249,6 +249,7 @@
   .bug textarea{font-size:20px; min-height:96px; resize:vertical}
   .bug details{color:var(--dim); font-size:16px}
   .bug summary{cursor:pointer; font-family:var(--pix); font-size:10px; letter-spacing:1px; text-transform:uppercase}
+  .bug pre.bugs-list{max-height:52vh; margin:0; color:var(--ink); background:var(--panel); padding:8px}
   .bug pre{margin:8px 0 0; max-height:30vh; overflow:auto; font:12px/1.3 ui-monospace,monospace; white-space:pre-wrap; word-break:break-word;
     -webkit-user-select:text; user-select:text}
   @media (prefers-reduced-motion:reduce){.menu::after,.logo .g,.cursor,.char[aria-pressed="true"] canvas{animation:none}}
@@ -286,6 +287,7 @@
     <div class="games" id="games"></div>
     <p class="note" id="netNote" hidden>Online play isn't available here right now. Practice against bots still works.</p>
     <button class="buglink bugOpen" type="button">Report a bug</button>
+    <button class="buglink" id="bugsBtn" type="button" hidden></button>
   </div>
 </section>
 
@@ -380,14 +382,30 @@
   <div class="card">
     <span class="lbl" id="bugHead">// Bug report</span>
     <textarea id="bugText" maxlength="1500" placeholder="What happened? (optional)" aria-label="What happened"></textarea>
-    <p class="note">Adds what the game and connection were doing over the last minute. Names in the game are included.</p>
-    <button id="bugGh" type="button">Send on GitHub</button>
+    <p class="note">Saves what the game and connection were doing over the last minute. In someone else's game it also goes to the host's phone.</p>
+    <button id="bugSave" type="button">Save report</button>
     <div class="row">
       <button id="bugShare" class="ghost" type="button">Share</button>
       <button id="bugCopy" class="ghost" type="button">Copy</button>
     </div>
     <button id="bugClose" class="ghost" type="button">Cancel</button>
-    <details><summary>What gets sent</summary><pre id="bugPrev"></pre></details>
+    <details><summary>What gets saved</summary><pre id="bugPrev"></pre></details>
+  </div>
+</section>
+
+<!-- SAVED BUG REPORTS -->
+<section class="bug" id="bugs" hidden role="dialog" aria-modal="true" aria-labelledby="bugsHead">
+  <div class="card">
+    <span class="lbl" id="bugsHead">// Saved bug reports</span>
+    <pre id="bugsList" class="bugs-list"></pre>
+    <div class="row">
+      <button id="bugsCopy" type="button">Copy all</button>
+      <button id="bugsShare" class="ghost" type="button">Share</button>
+    </div>
+    <div class="row">
+      <button id="bugsClear" class="ghost" type="button">Delete all</button>
+      <button id="bugsClose" class="ghost" type="button">Close</button>
+    </div>
   </div>
 </section>
 
@@ -460,6 +478,7 @@ const T = {
   LASER: [4.4, 1.5, 0.7], // laser lane: seconds idle, warning, firing
   SHIELD_INV: 1,          // seconds of invulnerability after a shield pops
 };
+let QUALITY = 2;   // drawing detail, lowered automatically on slow phones (see tuneQuality)
 let W = 11, H = 13, N = W * H;   // arena size: classic is 11x13 portrait; random maps change it each round
 const COLORS = ['#2de2e6', '#ff2a6d', '#fcee0a', '#7dff6a'];   // seat colors: rings, lights, HUD
 const CNAMES = ['Cyan', 'Pink', 'Yellow', 'Green'];
@@ -1222,6 +1241,7 @@ function encode(){
     o: [S.opts.wiki ? 1 : 0, S.opts.w1 ? 1 : 0, ['classic', 'random', 'open'].indexOf(S.opts.map), S.opts.wt || 5, S.opts.env,
       S.opts.pw ? 1 : 0, S.opts.hz ? 1 : 0, S.opts.gh ? 1 : 0, S.opts.tm ? 1 : 0],
     seat: S.seats.map(x => x ? [x.name, x.kind, x.peer || 0, x.gone ? 1 : 0, x.ch | 0, x.ch === CUSTOM ? x.cu : 0] : 0)};
+  if (S.bk && S.bk.length) s.bk = S.bk;
   if (S.ph === 'lobby') { if (S.tv) s.tv = S.tv; return s; }
   if (S.ph === 'round' && S.kc) s.kc = S.kc;
   if (S.ph === 'match' && S.awards) s.aw = S.awards;
@@ -1428,6 +1448,7 @@ async function openJoin(code, tv){
   NET.game = g; note((tv ? 'TV joined ' : 'joined ') + code + (g.url ? ' on ' + g.url : ''));
   if (!tv) store.set('bl-last', JSON.stringify({code, at: Date.now()}));
   document.body.classList.toggle('tv', !!tv); if (tv) wakeLock();
+  IB.buf = []; IB.off = null; IB.gap = 66; IB.late = []; IB.lags = []; IB.delay = 100;
   Object.assign(NET, {role: 'client', tv: !!tv, code, snapN: 0, seq: 0, fill: null, pend: [], seenHost: 0, joinedAt: performance.now(), lastHostPres: null});
   snap = null;
   NET.game.presence(tv ? {r: 'v', nm: 'TV'} : {r: 'p', pk: PK, nm: myName(), ch: myChar, cu: myChar === CUSTOM ? myCustom : null, a: []}).catch(() => {});
@@ -1477,6 +1498,12 @@ function hostSync(){
     s.name = cleanName(p.presence.nm) || s.name;
     s.cu = CUSTOM_RE.test(p.presence.cu || '') ? p.presence.cu : '';
     s.ch = chOf(p.presence.ch); if (s.ch === CUSTOM && !s.cu) s.ch = 0;
+    const bug = p.presence.bug;   // a guest's bug report: keep it on this (the host's) phone, and say we've got it
+    if (bug && typeof bug.id === 'string' && typeof bug.text === 'string' && !(S.bk || []).includes(bug.id)) {
+      keepBug({id: bug.id.slice(0, 12), at: +bug.at || Date.now(), from: (cleanName(bug.from) || s.name) + ' (guest)', text: bug.text.slice(0, 8000)});
+      S.bk = (S.bk || []).concat(bug.id).slice(-6);
+      note('bug report from ' + s.name);
+    }
     const e = p.presence.e;
     if (typeof e === 'number' && e !== s.echo) {
       s.echo = e; const rtt = now - e;
@@ -1511,9 +1538,10 @@ function hostSend(dt){
   // when they do, and every second for anyone who just joined.
   const out = Object.assign({}, snap, {t: Math.round(performance.now())});
   NET.sent = NET.sent || {};
-  for (const k of ['g', 'hz']) {   // after a change, repeat it in the next few sends in case one gets merged away
-    const m = NET.sent[k] || (NET.sent[k] = {v: null, n: 0});
-    if (typeof out[k] !== 'string' || out[k] !== m.v) { m.v = out[k]; m.n = 0; }
+  for (const k of ['g', 'hz', 'u']) {   // after a change, repeat it in the next few sends in case one gets merged away
+    const m = NET.sent[k] || (NET.sent[k] = {v: null, n: 0}), v = k === 'u' ? JSON.stringify(out.u) : out[k];
+    if (v === undefined) continue;
+    if (v !== m.v) { m.v = v; m.n = 0; }
     else if (++m.n >= 15) m.n = 0;
     else if (m.n >= 4) delete out[k];
   }
@@ -1532,11 +1560,12 @@ function clientSync(now){
       if (s.ph !== 'lobby') {   // the arena and hazards come now and then: keep the latest of each
         const dm = Array.isArray(s.dm) ? s.dm.join('x') : '', c = NET.fill && NET.fill.dm === dm ? NET.fill : (NET.fill = {dm});
         for (const k of ['g', 'hz']) if (typeof s[k] === 'string') c[k] = s[k];
+        if (Array.isArray(s.u)) c.u = s.u;
         if (typeof c.g !== 'string' || typeof c.hz !== 'string') s = null;
-        else if (typeof s.g !== 'string' || typeof s.hz !== 'string') s = Object.assign({}, s, {g: c.g, hz: c.hz});
+        else if (typeof s.g !== 'string' || typeof s.hz !== 'string' || !Array.isArray(s.u)) s = Object.assign({}, s, {g: c.g, hz: c.hz, u: c.u || []});
       }
       if (s) {
-        snap = s;
+        snap = s; interpPush(s, now);
         const slot = mySlot(), ack = slot >= 0 && Array.isArray(snap.k) ? +snap.k[slot] || 0 : 0;
         if (ack <= NET.seq) NET.pend = NET.pend.filter(e => e[0] > ack);   // (a bigger ack is from before a rejoin)
         // (not the first state: that's the relay's stored copy, possibly seconds old)
@@ -1549,6 +1578,45 @@ function clientSync(now){
   } else if (now - (NET.seenHost || NET.joinedAt) > T.HOST_TIMEOUT * 1000) {
     leave(NET.seenHost ? 'The host left the game.' : 'No game found with code ' + NET.code + '.');
   }
+}
+// ---- Smooth remote fighters: keep the last second or so of host states (stamped with the host's clock) and draw
+// other players a moment in the past, gliding between two real states, so uneven arrival over mobile data shows
+// as smooth movement instead of stutter. Your own fighter is predicted, so it stays instant. ----
+// How far back to draw adapts to the connection: the gap between host states plus how late most of them arrive
+// (85th percentile of the extra delay over the fastest trip), so a steady link stays close to live.
+const IB = {buf: [], off: null, gap: 66, late: [], lags: [], delay: 100};
+function interpPush(s, now){
+  if (typeof s.t !== 'number' || !Array.isArray(s.p)) return;
+  const B = IB.buf, last = B[B.length - 1];
+  if (last && (s.rd !== last.rd || s.t < last.t - 2000)) B.length = 0;   // new round, or a different host
+  else if (last && s.t <= last.t) return;
+  if (B.length) IB.gap += (Math.min(500, s.t - B[B.length - 1].t) - IB.gap) * .1;
+  B.push({t: s.t, rd: s.rd, p: s.p}); if (B.length > 30) B.shift();
+  const lag = now - s.t;   // arrival minus host time: the smallest lately is the fastest trip (plus the clock difference)
+  IB.lags.push(lag); if (IB.lags.length > 150) IB.lags.shift();
+  IB.off = Math.min(...IB.lags);
+  IB.late.push(lag - IB.off); if (IB.late.length > 40) IB.late.shift();
+  const sorted = IB.late.slice().sort((a, b) => a - b), p85 = sorted[Math.floor(sorted.length * .85)] || 0;
+  IB.delay = Math.max(50, Math.min(280, IB.gap + p85));
+}
+function interpPos(i, now){
+  const B = IB.buf; if (B.length < 2 || IB.off == null) return null;
+  const rt = now - IB.off - IB.delay;   // the host moment to show
+  let a, z;
+  if (rt >= B[B.length - 1].t) { a = B[B.length - 2]; z = B[B.length - 1]; }   // past the newest: coast a little
+  else { a = z = B[0]; for (let k = B.length - 1; k > 0; k--) if (B[k - 1].t <= rt) { a = B[k - 1]; z = B[k]; break; } }
+  const pa = a.p[i], pz = z.p[i];
+  if (!Array.isArray(pa) || !Array.isArray(pz) || !pa[2] || !pz[2]) return null;
+  const ax = pa[0] / 100, ay = pa[1] / 100, zx = pz[0] / 100, zy = pz[1] / 100;
+  if (Math.abs(ax - zx) + Math.abs(ay - zy) > 1.5) return {x: zx, y: zy};   // a jump (respawn, teleporter)
+  // between the two states; beyond the newest, keep going at the same pace for up to 120ms (never past a tile)
+  const span = z.t - a.t, k = span > 0 ? Math.max(0, Math.min(1 + Math.min(120, rt - z.t) / span, (rt - a.t) / span)) : 1;
+  let x = ax + (zx - ax) * k, y = ay + (zy - ay) * k;
+  if (k > 1) {   // coasting: stop at the middle of the tile they were heading into rather than guess past it
+    const stop = (v, a0, z0) => { const d = Math.sign(z0 - a0); return !d ? z0 : d > 0 ? Math.min(v, Math.ceil(z0 - 1e-6)) : Math.max(v, Math.floor(z0 + 1e-6)); };
+    x = stop(x, ax, zx); y = stop(y, ay, zy);
+  }
+  return {x, y};
 }
 function mySlot(){
   if (NET.role !== 'client') return 0;
@@ -2423,9 +2491,11 @@ function layout(){
   // Whole-number scaling keeps pixels crisp; but if that would waste over a quarter of the space (big arenas on
   // 2x screens), scale by a fraction instead.
   const vw = view.w || BW, vh = view.h || BH, fit = Math.min(st.clientWidth * dpr / vw, st.clientHeight * dpr / vh);
-  SCALE = Math.max(1, Math.floor(fit) / fit < .75 ? fit : Math.floor(fit));
+  const full = Math.max(1, Math.floor(fit) / fit < .75 ? fit : Math.floor(fit));
+  // On slower phones draw at a lower resolution and let the browser blow it up (pixel-sharp) to the same size.
+  SCALE = Math.min(full, QUALITY >= 2 ? 99 : QUALITY === 1 ? 2 : 1);
   cv.width = Math.round(vw * SCALE); cv.height = Math.round(vh * SCALE);
-  cv.style.width = cv.width / dpr + 'px'; cv.style.height = cv.height / dpr + 'px';
+  cv.style.width = vw * full / dpr + 'px'; cv.style.height = vh * full / dpr + 'px';
 }
 addEventListener('resize', () => { if (screen === 'game') layout(); });
 
@@ -2435,10 +2505,19 @@ function rgba(hex, a){
   if (!c) { const n = parseInt(hex.slice(1), 16); c = [(n >> 16) & 255, (n >> 8) & 255, n & 255]; rgbCache.set(hex, c); }
   return `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 }
+// Lights are pre-drawn soft discs, one per color and size, stamped onto the glow layer.
+const lightCache = new Map();
 function light(x, y, r, hex, a){
-  const gr = gl.createRadialGradient(x, y, 0, x, y, r);
-  gr.addColorStop(0, rgba(hex, a)); gr.addColorStop(1, rgba(hex, 0));
-  gl.fillStyle = gr; gl.fillRect(x - r, y - r, r * 2, r * 2);
+  r = Math.round(r);
+  if (view.on && (x + r < view.x - 24 || y + r < view.y - 24 || x - r > view.x + view.w + 24 || y - r > view.y + view.h + 24)) return;
+  const key = hex + r;
+  let c = lightCache.get(key);
+  if (!c) {
+    c = cnv(r * 2, r * 2); const g = c.getContext('2d'), gr = g.createRadialGradient(r, r, 0, r, r, r);
+    gr.addColorStop(0, rgba(hex, 1)); gr.addColorStop(1, rgba(hex, 0));
+    g.fillStyle = gr; g.fillRect(0, 0, r * 2, r * 2); lightCache.set(key, c);
+  }
+  gl.globalAlpha = a; gl.drawImage(c, Math.round(x - r), Math.round(y - r)); gl.globalAlpha = 1;
 }
 
 const disp = [null, null, null, null];   // smoothed positions for remote snapshots
@@ -2636,6 +2715,33 @@ function weather(kind, dt, now){
 let shake = 0, lastBoom = -1;
 
 let hitstop = 0, replaying = false;
+// Floor, walls, crates and voids only change when a crate breaks, the ring closes or a round starts: draw the walls
+// and crates once into a layer and reuse it every frame. Also remembers where the walls and lamps are.
+let layers = {key: '', top: null, walls: [], lamps: []};
+function staticLayers(fa, str){
+  const key = fa.floor.width + 'x' + fa.floor.height + '|' + fa.E.name + '|' + fa.walls[0].width + '|' + str;
+  if (layers.key === key && layers.fa === fa) return layers;
+  const top = layers.top && layers.top.width === BW && layers.top.height === BH ? layers.top : cnv(BW, BH), g = top.getContext('2d');
+  g.clearRect(0, 0, BW, BH);
+  const walls = [], lamps = [];
+  for (let i = 0; i < N; i++) {
+    const c = str[i], x = i % W, y = (i / W) | 0;
+    if (c === '1') {
+      g.drawImage(fa.walls[fa.walls.length > 1 ? (hash(x, y, 1) * fa.walls.length) | 0 : 0], x * TS, y * TS); walls.push(i);
+      const lc2 = fa.E.lamp && fa.E.lamp(x, y); if (lc2) lamps.push([i, lc2]);
+    }
+    else if (c === '2') g.drawImage(fa.crate, x * TS, y * TS);
+    else if (c === '3') { g.fillStyle = '#000'; g.fillRect(x * TS, y * TS, TS, TS); }
+  }
+  layers = {key, fa, top, walls, lamps};
+  return layers;
+}
+// The part of the arena worth lighting this frame: what the camera shows (with a margin), or all of it.
+function lit(){
+  if (!view.on) return {x: 0, y: 0, w: BW, h: BH};
+  const x = Math.max(0, Math.floor(view.x) - 24), y = Math.max(0, Math.floor(view.y) - 24);
+  return {x, y, w: Math.min(BW - x, view.w + 48), h: Math.min(BH - y, view.h + 48)};
+}
 function drawGame(s, dt, now){
   if (now < hitstop && !replaying) {   // a kill freezes the frame for a beat, shaking, with a white kick
     if (shake > 0) shake -= dt;
@@ -2649,10 +2755,11 @@ function drawGame(s, dt, now){
   if (!replaying && typeof s.bx === 'number' && s.bx !== lastBoom) { if (lastBoom >= 0 && s.bx > lastBoom) { shake = reduce ? 0 : .2; boom(); } lastBoom = s.bx; }
   if (s.rd !== decalRound || s.ph === 'count') { decals = []; decalRound = s.rd; }
 
+  const L = staticLayers(fa, str), R = lit();   // R: the area being lit (the camera's view, padded)
   // ground
   b.globalCompositeOperation = 'source-over';
-  b.drawImage(fa.floor, 0, 0);
-  b.globalAlpha = reduce ? .12 : .08 + .07 * Math.sin(now / 900); b.drawImage(fa.grout, 0, 0); b.globalAlpha = 1;
+  b.drawImage(fa.floor, R.x, R.y, R.w, R.h, R.x, R.y, R.w, R.h);
+  if (QUALITY > 0) { b.globalAlpha = reduce ? .12 : .08 + .07 * Math.sin(now / 900); b.drawImage(fa.grout, R.x, R.y, R.w, R.h, R.x, R.y, R.w, R.h); b.globalAlpha = 1; }
   if (!replaying) for (const d of decals) b.drawImage(d.img, d.x, d.y);
   dust = dust.filter(d => now - d.t0 < 350);
   for (const d of dust) {
@@ -2666,14 +2773,10 @@ function drawGame(s, dt, now){
   // world, row by row so lower things overlap higher ones
   const fire = new Map(), f = Array.isArray(s.f) ? s.f : [];
   for (let k = 0; k + 1 < f.length; k += 2) fire.set(f[k], f[k + 1] / 100);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const c = str[y * W + x];
-    if (c === '1') {
-      b.drawImage(fa.walls[fa.walls.length > 1 ? (hash(x, y, 1) * fa.walls.length) | 0 : 0], x * TS, y * TS);
-      const bl = E.blink && E.blink(x, y, now); if (bl) { b.fillStyle = bl[2]; b.fillRect(x * TS + bl[0], y * TS + bl[1], 1, 1); }
-    }
-    else if (c === '2') b.drawImage(fa.crate, x * TS, y * TS);
-    else if (c === '3') { b.fillStyle = '#000'; b.fillRect(x * TS, y * TS, TS, TS); }
+  b.drawImage(L.top, R.x, R.y, R.w, R.h, R.x, R.y, R.w, R.h);
+  if (E.blink && QUALITY > 1) for (const i of L.walls) {
+    const x = i % W, y = (i / W) | 0, bl = E.blink(x, y, now);
+    if (bl) { b.fillStyle = bl[2]; b.fillRect(x * TS + bl[0], y * TS + bl[1], 1, 1); }
   }
   if (hzs) drawLaser(hzs, s.lz, now, true);
   const u = Array.isArray(s.u) ? s.u : [];
@@ -2705,8 +2808,9 @@ function drawGame(s, dt, now){
   for (let i = 0; i < 4; i++) {
     const p = ps[i], A = anim[i];
     if (!Array.isArray(p)) { disp[i] = null; A.alive = false; continue; }
-    let x = p[0] / 100, y = p[1] / 100;
+    let x = p[0] / 100, y = p[1] / 100, ip;
     if (remote && i === me && pred.on && !replaying) { x = pred.x; y = pred.y; disp[i] = {x, y}; }
+    else if (remote && !replaying && (ip = interpPos(i, now))) { x = ip.x; y = ip.y; disp[i] = {x, y}; }
     else if (remote) {
       const d = disp[i];
       if (!d || Math.abs(d.x - x) + Math.abs(d.y - y) > 2) disp[i] = {x, y};
@@ -2768,27 +2872,30 @@ function drawGame(s, dt, now){
     }
   }
 
-  // lighting: colored lights over a dim ambient, multiplied; then a soft additive glow
-  gl.globalCompositeOperation = 'source-over'; gl.clearRect(0, 0, BW, BH); gl.globalCompositeOperation = 'lighter';
-  light(0, 0, 150, fa.neon, .45); light(BW, BH, 150, fa.neon2, .45);
-  if (E.lamp) for (let i = 0; i < N; i++) if (str[i] === '1') { const lc2 = E.lamp(i % W, (i / W) | 0); if (lc2) light((i % W) * TS + 8, ((i / W) | 0) * TS + 4, 26, lc2, .5 + .08 * Math.sin(now / 140 + i)); }
-  for (const o of order) light(o.x * TS + 8, o.y * TS + 7, 34, COLORS[o.i], .55);
-  for (const bm of Array.isArray(s.b) ? s.b : []) light(bm[0] * TS + 8, bm[1] * TS + 8, 18 + (((now / 90) | 0) & 1) * 4, '#ff2a5a', .6);
-  for (const [i, ttl] of fire) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 26, '#ff9a3c', Math.min(.8, ttl * 1.6));
-  for (let k = 0; k + 1 < u.length; k += 2) light((u[k] % W) * TS + 8, ((u[k] / W) | 0) * TS + 8, 14, UP_GLOW[u[k + 1]] || '#fff', .5);
-  if (Array.isArray(s.ln) && s.ln[2] / 100 >= T.LANCE_WIND) for (const i of lanceBand(+s.ln[3], +s.ln[4], s.ln[1])) if (hash(i, 1, 1) < .3) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 26, '#b967ff', .6);
-  for (let i = 0; i < hzs.length && i < N; i++) {
-    if (hzs[i] === '6') light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 22, '#ff3df2', .5);
-    else if ((hzs[i] === '8' || hzs[i] === '9') && Array.isArray(s.lz) && s.lz[0] === 2) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 18, '#ff2a5a', .55);
+  // lighting: colored lights over a dim ambient, multiplied; then a soft additive glow. Only over the area on screen,
+  // and on slower phones (QUALITY 1) only the lights that matter; QUALITY 0 skips lighting altogether.
+  if (QUALITY > 0) {
+    gl.globalCompositeOperation = 'source-over'; gl.clearRect(R.x, R.y, R.w, R.h); gl.globalCompositeOperation = 'lighter';
+    light(0, 0, 150, fa.neon, .45); light(BW, BH, 150, fa.neon2, .45);
+    if (QUALITY > 1) for (const [i, lc2] of L.lamps) light((i % W) * TS + 8, ((i / W) | 0) * TS + 4, 26, lc2, .5 + .08 * Math.sin(now / 140 + i));
+    for (const o of order) light(o.x * TS + 8, o.y * TS + 7, 34, COLORS[o.i], .55);
+    for (const bm of Array.isArray(s.b) ? s.b : []) light(bm[0] * TS + 8, bm[1] * TS + 8, 18 + (((now / 90) | 0) & 1) * 4, '#ff2a5a', .6);
+    for (const [i, ttl] of fire) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 26, '#ff9a3c', Math.min(.8, ttl * 1.6));
+    if (QUALITY > 1) for (let k = 0; k + 1 < u.length; k += 2) light((u[k] % W) * TS + 8, ((u[k] / W) | 0) * TS + 8, 14, UP_GLOW[u[k + 1]] || '#fff', .5);
+    if (Array.isArray(s.ln) && s.ln[2] / 100 >= T.LANCE_WIND) for (const i of lanceBand(+s.ln[3], +s.ln[4], s.ln[1])) if (hash(i, 1, 1) < .3) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 26, '#b967ff', .6);
+    if (QUALITY > 1) for (let i = 0; i < hzs.length && i < N; i++) {
+      if (hzs[i] === '6') light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 22, '#ff3df2', .5);
+      else if ((hzs[i] === '8' || hzs[i] === '9') && Array.isArray(s.lz) && s.lz[0] === 2) light((i % W) * TS + 8, ((i / W) | 0) * TS + 8, 18, '#ff2a5a', .55);
+    }
+    lc.globalCompositeOperation = 'source-over'; lc.fillStyle = flash > now ? '#d8d8ff' : E.amb || T.AMBIENT; lc.fillRect(R.x, R.y, R.w, R.h);
+    lc.globalCompositeOperation = 'lighter'; lc.drawImage(glowC, R.x, R.y, R.w, R.h, R.x, R.y, R.w, R.h);
+    b.globalCompositeOperation = 'multiply'; b.drawImage(lightC, R.x, R.y, R.w, R.h, R.x, R.y, R.w, R.h);
+    b.globalCompositeOperation = 'lighter'; b.globalAlpha = .35; b.drawImage(glowC, R.x, R.y, R.w, R.h, R.x, R.y, R.w, R.h); b.globalAlpha = 1;
+    b.globalCompositeOperation = 'source-over';
   }
-  lc.globalCompositeOperation = 'source-over'; lc.fillStyle = flash > now ? '#d8d8ff' : E.amb || T.AMBIENT; lc.fillRect(0, 0, BW, BH);
-  lc.globalCompositeOperation = 'lighter'; lc.drawImage(glowC, 0, 0);
-  b.globalCompositeOperation = 'multiply'; b.drawImage(lightC, 0, 0);
-  b.globalCompositeOperation = 'lighter'; b.globalAlpha = .35; b.drawImage(glowC, 0, 0); b.globalAlpha = 1;
-  b.globalCompositeOperation = 'source-over';
-  weather(E.fx, dt, now);
+  if (QUALITY > 1) weather(E.fx, dt, now);
   if (E.day) b.globalAlpha = .35;
-  b.drawImage(VIGNETTE, 0, 0); b.globalAlpha = 1;
+  b.drawImage(VIGNETTE, R.x, R.y, R.w, R.h); b.globalAlpha = 1;
 
   if (hzs && Array.isArray(s.lz)) drawLaser(hzs, s.lz, now, false);
   drawGhosts(s, now, seats, me);
@@ -3158,11 +3265,17 @@ function psyK(now){   // 0..1: slams in, holds, settles to a lingering haze whil
   return reduce ? k * .3 : k;
 }
 function blit(ox, oy, dt, now){
-  const S = SCALE, k = psyK(now);
-  ox -= Math.round(view.x * S); oy -= Math.round(view.y * S);   // the camera
+  const S = SCALE, k = psyK(now), camX = Math.round(view.x * S), camY = Math.round(view.y * S);
   ctx.imageSmoothingEnabled = false; ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, cv.width, cv.height);
-  if (k <= 0) { ctx.drawImage(buf, ox, oy, BW * S, BH * S); drawBursts(dt, now, ox, oy); return; }
+  if (k <= 0) {
+    if (view.on) {   // upscale only the part the camera shows
+      const sx = Math.floor(view.x), sy = Math.floor(view.y), sw = Math.min(BW - sx, view.w + 1), sh = Math.min(BH - sy, view.h + 1);
+      ctx.drawImage(buf, sx, sy, sw, sh, ox - Math.round((view.x - sx) * S), oy - Math.round((view.y - sy) * S), sw * S, sh * S);
+    } else ctx.drawImage(buf, ox, oy, BW * S, BH * S);
+    drawBursts(dt, now, ox - camX, oy - camY); return;
+  }
+  ox -= camX; oy -= camY;   // the camera
   for (const [g, col] of [[rcx, '#ff0000'], [ccx, '#00ffff']]) {      // split red from cyan
     g.globalCompositeOperation = 'copy'; g.drawImage(buf, 0, 0);
     g.globalCompositeOperation = 'multiply'; g.fillStyle = col; g.fillRect(0, 0, BW, BH);
@@ -3743,8 +3856,8 @@ function wakeLock(){ try { navigator.wakeLock && navigator.wakeLock.request('scr
 
 // ---- Bug reports ----------------------------------------------------------------
 // The report is a snapshot taken when the button is pressed: device, game and connection state, plus the flight
-// recorder. It goes out as a pre-filled GitHub issue, or through the share sheet / clipboard.
-const BUG_URL = 'https://github.com/heckiemoney1/blast-lanes/issues/new';
+// recorder. It's saved on this phone; a guest's report is also passed to the host's phone over the game connection,
+// so everything ends up in one place. Saved reports are listed from the home screen (copy, share or delete them).
 let recPh = '', recAt = 0, recN = 0, recSt = null, recRx = 0, recTx = 0, bugCap = null;
 function record(now){
   recN++;
@@ -3753,7 +3866,7 @@ function record(now){
   if (now - recAt < 2000) return;
   const el = (now - recAt) / 1000, fps = Math.round(recN / el); recAt = now; recN = 0;
   if (!NET.role) return;
-  const g = NET.game, st = g && g.stats, parts = ['fps ' + fps];
+  const g = NET.game, st = g && g.stats, parts = ['fps ' + fps + ' q' + QUALITY];
   if (st) {
     if (st !== recSt) { recSt = st; recRx = st.rx; recTx = st.tx; }
     parts.push('in ' + (st.rx - recRx) + ' out ' + (st.tx - recTx)); recRx = st.rx; recTx = st.tx;
@@ -3808,17 +3921,49 @@ function copyText(t){
 for (const el of document.querySelectorAll('.bugOpen')) el.onclick = openBug;
 $('bugClose').onclick = closeBug;
 $('bug').addEventListener('keydown', e => { if (e.key === 'Escape') closeBug(); });
-$('bugGh').onclick = () => {
-  const d = $('bugText').value.trim(), title = 'Bug: ' + (d.split('\n')[0].slice(0, 70) || 'report from ' + (NET.role || 'menu'));
-  let n = 80, url;
-  do { url = BUG_URL + '?title=' + encodeURIComponent(title) + '&body=' + encodeURIComponent((d || '_(no description)_') + '\n\n```\n' + bugText(bugCap, n) + '\n```'); n -= 10; }
-  while (url.length > 7500 && n > 0);
-  const w = window.open(url, '_blank', 'noopener');
-  if (w === null) copyText(bugPlain()).then(ok => toast(ok ? "Couldn't open GitHub here, so the report is copied. Paste it to whoever fixes things." : "Couldn't open GitHub here."));
+const BUGS_MAX = 40;
+function loadBugs(){ try { const a = JSON.parse(store.get('bl-bugs') || '[]'); return Array.isArray(a) ? a : []; } catch { return []; } }
+function keepBug(r){   // newest first; also drops the oldest if this phone's storage is full
+  const all = loadBugs().filter(x => x && x.id !== r.id);
+  all.unshift(r); all.length = Math.min(all.length, BUGS_MAX);
+  for (let n = all.length; n > 0; n--) { try { localStorage.setItem('bl-bugs', JSON.stringify(all.slice(0, n))); break; } catch {} }
+  renderBugsBtn();
+}
+function renderBugsBtn(){ const n = loadBugs().length, b = $('bugsBtn'); b.hidden = !n; b.textContent = 'Saved bug reports (' + n + ')'; }
+function bugsText(){
+  return loadBugs().map(r => '=== ' + new Date(r.at).toLocaleString() + ' · from ' + (r.from || '?') + ' ===\n' + r.text).join('\n\n');
+}
+// Guests hand their report to the host: it rides in the guest's presence until the host's state lists its id.
+const bugOut = {r: null, until: 0};
+$('bugSave').onclick = () => {
+  const d = $('bugText').value.trim(), r = {id: Math.random().toString(36).slice(2, 10), at: Date.now(), from: myName(),
+    text: (d || '(no description)') + '\n\n' + bugText(bugCap, 80)};
+  keepBug(r);
+  if (NET.role === 'client' && NET.game) {
+    bugOut.r = {id: r.id, at: r.at, from: r.from, text: ((d || '(no description)') + '\n\n' + bugText(bugCap, 40)).slice(0, 6000)};
+    bugOut.until = performance.now() + 20000;
+    NET.game.presence({bug: bugOut.r}).catch(() => {});
+    toast('Report saved, and sent to the host.');
+  } else toast('Report saved. Find it under "Saved bug reports" on the home screen.');
   closeBug();
 };
+function bugSync(now){   // guest side: stop carrying the report once the host has it (or after 20s)
+  if (!bugOut.r || !NET.game) return;
+  if ((snap && Array.isArray(snap.bk) && snap.bk.includes(bugOut.r.id)) || now > bugOut.until) { bugOut.r = null; NET.game.presence({bug: null}).catch(() => {}); }
+}
+$('bugsBtn').onclick = () => { $('bugsList').textContent = bugsText() || 'No saved reports.'; $('bugsShare').hidden = !navigator.share; $('bugs').hidden = false; };
+$('bugsClose').onclick = () => { $('bugs').hidden = true; };
+$('bugsCopy').onclick = () => { copyText(bugsText()).then(ok => toast(ok ? 'All reports copied.' : "Couldn't copy. Select the text and copy it instead.")); };
+$('bugsShare').onclick = () => { navigator.share({title: 'Blast Lanes bug reports', text: bugsText()}).catch(() => {}); };
+$('bugsClear').onclick = () => {   // tap twice to delete
+  const b = $('bugsClear');
+  if (!b.dataset.armed) { b.dataset.armed = '1'; b.textContent = 'Tap again to delete'; setTimeout(() => { delete b.dataset.armed; b.textContent = 'Delete all'; }, 3000); return; }
+  delete b.dataset.armed; b.textContent = 'Delete all';
+  store.set('bl-bugs', '[]'); renderBugsBtn(); $('bugs').hidden = true; toast('Bug reports deleted.');
+};
+renderBugsBtn();
 $('bugShare').onclick = () => { navigator.share({title: 'Blast Lanes bug report', text: bugPlain()}).then(closeBug, () => {}); };
-$('bugCopy').onclick = () => { copyText(bugPlain()).then(ok => { toast(ok ? 'Report copied.' : "Couldn't copy. Open “What gets sent” and copy it from there."); if (ok) closeBug(); }); };
+$('bugCopy').onclick = () => { copyText(bugPlain()).then(ok => { toast(ok ? 'Report copied.' : "Couldn't copy. Open “What gets saved” and copy it from there."); if (ok) closeBug(); }); };
 
 // ---- Debug panel (open the game with #debug at the end of the address) -------------
 const DEBUG = location.hash === '#debug';
@@ -3841,19 +3986,32 @@ if (DEBUG) setInterval(() => {
 // ---- Main loop ------------------------------------------------------------------
 const STEP = 1 / 60;
 let last = 0, acc = 0;
+// Auto quality: 2 = everything, 1 = no weather or decorative lights and at most 2x resolution, 0 = no lighting and
+// 1x resolution. Steps down when this phone can't hold the frame rate; a phone capped at 30fps by battery saver
+// only drops to 1, since 0 wouldn't help it. (QUALITY itself is declared with the tunables.)
+const perf = {dt: 1 / 60, work: 0, slow: 0};
+function tuneQuality(dt, work){
+  if (screen !== 'game' || dt > .1 || !dt) return;
+  perf.dt += (dt - perf.dt) * .05; perf.work += (work - perf.work) * .05;
+  const fps = 1 / perf.dt, bad = QUALITY === 2 ? fps < 48 : fps < 40 && (perf.work > 8 || fps < 26);
+  perf.slow = bad ? perf.slow + dt : Math.max(0, perf.slow - dt);
+  if (perf.slow > (QUALITY === 2 ? 2 : 3) && QUALITY > 0) { QUALITY--; perf.slow = -2; note('quality lowered to ' + QUALITY); layout(); }
+}
 function frame(now){
   const dt = Math.min(.1, (now - (last || now)) / 1000); last = now;
+  const t0 = performance.now();
   try {
     if (NET.role === 'host' || NET.role === 'solo') {
       if (NET.game) hostSync();
       acc += dt; while (acc >= STEP) { update(STEP); acc -= STEP; }
       snap = encode();
       if (NET.game) hostSend(dt);
-    } else if (NET.role === 'client' && NET.game) { clientSync(now); if (snap) predStep(snap, dt, now); }
+    } else if (NET.role === 'client' && NET.game) { clientSync(now); bugSync(now); if (snap) predStep(snap, dt, now); }
     holdTick(now);
     if (NET.role && snap) present(snap, dt, now);
     else if (NET.role === 'client') show('home');
   } catch (err) { console.error(err); noteErr(err); }
+  tuneQuality(dt, performance.now() - t0);
   record(now);
   requestAnimationFrame(frame);
 }
