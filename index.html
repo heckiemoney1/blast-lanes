@@ -358,7 +358,7 @@
       <button id="leaveOver" class="ghost">Leave</button>
     </div>
   </div>
-  <div class="hint"><span id="hintText"><b>swipe</b> step · <b>tap</b> bomb</span><button class="ghost bugOpen" type="button">Bug</button><button id="leaveGame" class="ghost">Quit</button></div>
+  <div class="hint"><span id="hintText"><b>swipe</b>/hold move · <b>tap</b> bomb</span><button class="ghost bugOpen" type="button">Bug</button><button id="leaveGame" class="ghost">Quit</button></div>
 </section>
 
 <!-- RESPAWN WIKIRACE -->
@@ -443,6 +443,7 @@ const T = {
   KILLCAM: 4.4,           // extra round pause when the round-ending kill gets a slow-motion replay
   BOT_THINK: 0.14,
   SWIPE_PX: 22, TAP_MS: 320,
+  HOLD_DELAY: 0.3,        // keep your finger (or a key) down this long after a swipe and you keep walking that way
   NET_HZ: 20, HOST_TIMEOUT: 15,   // seconds without the host before a phone gives up
   DROP_GRACE: 15,         // seconds a seated player may vanish (phone signal blips) before losing the seat
   AMBIENT: 'rgb(112,100,150)',   // how dark the unlit field is (lower = darker)
@@ -1193,11 +1194,14 @@ function wantsBomb(p, i){
   }
   return false;
 }
+// Bots plan their next step as they finish the current one, so they flow from tile to tile like a player
+// holding a swipe; they only pause to think when they've stopped.
 function botThink(p, dt){
   p.think -= dt;
-  if (p.think > 0 || p.moving || p.q.length) return;
+  const left = Math.abs(p.tx - p.x) + Math.abs(p.ty - p.y);
+  if (p.q.length || (p.moving && left > .3) || (!p.moving && p.think > 0)) return;
   p.think = T.BOT_THINK * (0.6 + Math.random() * 0.8);
-  const here = cellOf(p), dz = dangerMap();
+  const here = p.moving ? p.ty * W + p.tx : cellOf(p), dz = dangerMap();
   const free = i => S.g[i] === 0 && !bombAt(i) && !(S.fl[i] > 0);
   if (dz[here]) { const s = firstStep(here, i => !dz[i], free); if (s) p.q.push(s); return; }
   if (S.bombs.filter(b => b.owner === p.slot).length < p.bombs && wantsBomb(p, here) && Math.random() < 0.9) {
@@ -1205,7 +1209,7 @@ function botThink(p, dt){
     const s = firstStep(here, i => !dz2[i], free);
     if (s && dropBomb(p)) { p.q.push(s); return; }
   }
-  if (Math.random() < 0.08) return;
+  if (!p.moving && Math.random() < 0.08) return;
   const safe = i => free(i) && !dz[i];
   const s = firstStep(here, i => S.ups.some(u => u.i === i), safe)
     || firstStep(here, i => Object.values(DIR).some(([dx, dy]) => S.g[i + dy * W + dx] === 2) || enemyNear(p, i, 2), safe);
@@ -2219,12 +2223,55 @@ surf.addEventListener('touchstart', e => {
 surf.addEventListener('touchmove', e => {
   e.preventDefault();
   for (const t of e.changedTouches) {
-    const s = touches.get(t.identifier); if (!s || s.fired) continue;
+    const s = touches.get(t.identifier); if (!s) continue;
     const dx = t.clientX - s.x, dy = t.clientY - s.y;
-    if (Math.hypot(dx, dy) > T.SWIPE_PX) { s.fired = true; swipe(dirOf(dx, dy)); }
+    if (Math.hypot(dx, dy) <= T.SWIPE_PX) continue;
+    const d = dirOf(dx, dy);
+    s.x = t.clientX; s.y = t.clientY;   // measure the next swipe from here
+    if (s.fired && d === s.d) continue;  // same way, further: just keep holding
+    s.fired = true; s.d = d; swipe(d); startHold(d, 't' + t.identifier);
   }
 }, {passive: false});
 const swipe = d => g2048 ? move2048(d) : sendAct(d);
+// Swipe and hold: after a swipe, keeping your finger down keeps your fighter walking that way, a tile at a
+// time; slide your finger another way to turn (if that way is blocked, you keep going and take the turn at the
+// next opening), lift it to stop. A quick flick is still exactly one tile.
+let hold = null;
+function startHold(d, by){
+  const now = performance.now(), turning = hold && hold.by === by && hold.d !== d;
+  hold = g2048 ? null : {d, by, at: turning ? now - T.HOLD_DELAY * 1000 : now, sent: 0, prev: turning ? hold.d : null};
+}
+// Whether my fighter could step that way from the tile it's on (or heading into).
+function canGo(d){
+  const [dx, dy] = DIR[d];
+  if (NET.role === 'client') {
+    if (!pred.on || !snap || typeof snap.g !== 'string') return true;
+    const x = pred.moving ? pred.tx : Math.round(pred.x), y = pred.moving ? pred.ty : Math.round(pred.y), i = (y + dy) * W + x + dx;
+    return snap.g[i] === '0' && !(Array.isArray(snap.b) && snap.b.some(b => b[1] * W + b[0] === i));
+  }
+  const p = S.players[0], x = p.moving ? p.tx : Math.round(p.x), y = p.moving ? p.ty : Math.round(p.y);
+  return canEnter((y + dy) * W + x + dx);
+}
+function endHold(by){ if (hold && hold.by === by) hold = null; }
+function holdTick(now){
+  if (!hold || g2048 || screen !== 'game' || now - hold.at < T.HOLD_DELAY * 1000) return;
+  // only feed the next step as the current one runs out, so the queue never builds up
+  let left, speed;
+  if (NET.role === 'client') {
+    const p = snap && Array.isArray(snap.p) ? snap.p[mySlot()] : null;
+    if (!pred.on || !Array.isArray(p) || !p[2]) return;
+    if (pred.q.length) return;
+    left = pred.moving ? Math.abs(pred.tx - pred.x) + Math.abs(pred.ty - pred.y) : 0; speed = (+p[8] || T.SPEED * 10) / 10;
+  } else {
+    const p = S && S.players && S.players[0];
+    if (!p || !p.alive || p.q.length) return;
+    left = p.moving ? Math.abs(p.tx - p.x) + Math.abs(p.ty - p.y) : 0; speed = p.speed;
+  }
+  if (left > .3 || now - hold.sent < 600 / speed) return;
+  let d = hold.d;
+  if (!canGo(d)) { if (hold.prev && canGo(hold.prev)) d = hold.prev; else return; }
+  hold.sent = now; sendAct(d);
+}
 // Taps: on or below the field they drop a bomb. The secret finisher is two taps ABOVE the field, then two
 // BELOW it, within SECRET_TIME (3 + 3 = domain, 4 + 1 = Frozen Hour, 5 + 1 = Void Lance). Taps above the field
 // never do anything else, so the secrets can't misfire.
@@ -2278,24 +2325,34 @@ function keyTap(){
 }
 const endTouch = e => {
   for (const t of e.changedTouches) {
-    const s = touches.get(t.identifier); touches.delete(t.identifier);
+    const s = touches.get(t.identifier); touches.delete(t.identifier); endHold('t' + t.identifier);
     if (s && !s.fired && e.type === 'touchend' && performance.now() - s.t < T.TAP_MS) tap(t.clientX, t.clientY);
   }
 };
 surf.addEventListener('touchend', endTouch); surf.addEventListener('touchcancel', endTouch);
 let mouse = null;   // desktop testing of the touch scheme
 surf.addEventListener('mousedown', e => { if (!e.target.closest('button')) mouse = {x: e.clientX, y: e.clientY, t: performance.now(), fired: false}; });
-addEventListener('mousemove', e => { if (!mouse || mouse.fired) return; const dx = e.clientX - mouse.x, dy = e.clientY - mouse.y;
-  if (Math.hypot(dx, dy) > T.SWIPE_PX) { mouse.fired = true; swipe(dirOf(dx, dy)); } });
-addEventListener('mouseup', e => { if (mouse && !mouse.fired && performance.now() - mouse.t < T.TAP_MS) tap(e.clientX, e.clientY); mouse = null; });
+addEventListener('mousemove', e => {
+  if (!mouse) return; const dx = e.clientX - mouse.x, dy = e.clientY - mouse.y;
+  if (Math.hypot(dx, dy) <= T.SWIPE_PX) return;
+  const d = dirOf(dx, dy); mouse.x = e.clientX; mouse.y = e.clientY;
+  if (mouse.fired && d === mouse.d) return;
+  mouse.fired = true; mouse.d = d; swipe(d); startHold(d, 'm');
+});
+addEventListener('mouseup', e => { if (mouse && !mouse.fired && performance.now() - mouse.t < T.TAP_MS) tap(e.clientX, e.clientY); mouse = null; endHold('m'); });
 addEventListener('keydown', e => {
   if (screen !== 'game' || !$('wiki').hidden || !$('bug').hidden) return;
   const k = {arrowup: 'u', w: 'u', arrowdown: 'd', s: 'd', arrowleft: 'l', a: 'l', arrowright: 'r', d: 'r', ' ': 'b'}[e.key.toLowerCase()];
   if (!k || e.repeat) return; e.preventDefault();
   if (cam && k === 'b') { cam = null; return; }
   if (k === 'b') { if (!$('jumpBtn').hidden) $('jumpBtn').click(); else keyTap(); }
-  else { keyHist.push([k, performance.now()]); if (keyHist.length > 8) keyHist.shift(); swipe(k); }
+  else { keyHist.push([k, performance.now()]); if (keyHist.length > 8) keyHist.shift(); swipe(k); startHold(k, 'k' + k); }
 });
+addEventListener('keyup', e => {
+  const k = {arrowup: 'u', w: 'u', arrowdown: 'd', s: 'd', arrowleft: 'l', a: 'l', arrowright: 'r', d: 'r'}[e.key.toLowerCase()];
+  if (k) endHold('k' + k);
+});
+addEventListener('blur', () => { hold = null; });
 
 // ---- Buttons ------------------------------------------------------------------
 $('name').value = store.get('bl-name') || '';
@@ -3369,7 +3426,7 @@ function present(s, dt, now){
 // On a computer the controls are keys, not swipes: say so wherever the touch controls are described.
 const TOUCH = matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
 if (!TOUCH) {
-  $('hintText').innerHTML = '<b>arrows</b>/<b>WASD</b> step · <b>space</b>/<b>click</b> bomb';
+  $('hintText').innerHTML = '<b>arrows</b>/<b>WASD</b> move (hold to run) · <b>space</b>/<b>click</b> bomb';
   $('tag').insertAdjacentHTML('beforeend', '<br>&gt; on a computer: <b>arrows/WASD</b> move · <b>space</b> = bomb');
 }
 const HINT_HTML = $('hintText').innerHTML;
@@ -3793,6 +3850,7 @@ function frame(now){
       snap = encode();
       if (NET.game) hostSend(dt);
     } else if (NET.role === 'client' && NET.game) { clientSync(now); if (snap) predStep(snap, dt, now); }
+    holdTick(now);
     if (NET.role && snap) present(snap, dt, now);
     else if (NET.role === 'client') show('home');
   } catch (err) { console.error(err); noteErr(err); }
